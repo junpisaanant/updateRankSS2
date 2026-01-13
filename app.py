@@ -126,6 +126,7 @@ def create_history_record(project_id, member_id, score):
 
 st.title("🏆 Update คะแนนแรงค์ Season2")
 st.write("ระบบคำนวณคะแนนอัตโนมัติตามลำดับใน Excel")
+st.write("บรรทัดแรกสุด(ชื่องานแข่ง)ให้เอาจาก>> https://docs.google.com/spreadsheets/d/1DPklisqF-ykQtKgg2h2AH-Q5ePN30zr1lNm9EaRjvg4/edit?usp=sharing")
 
 uploaded_file = st.file_uploader("เลือกไฟล์ Excel (.xlsx)", type=['xlsx'])
 
