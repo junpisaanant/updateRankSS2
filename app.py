@@ -96,7 +96,7 @@ def calculate_score(row_index, is_minor_event):
         score = 16
     elif 5 <= row_index <= 8:   # บรรทัด 6-9
         score = 10
-    elif 9 <= row_index <= 15:  # บรรทัด 10-16
+    elif 9 <= row_index <= 16:  # บรรทัด 10-17
         score = 5
     else:                   # บรรทัด 17 เป็นต้นไป
         score = 2
