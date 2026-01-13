@@ -126,7 +126,8 @@ def create_history_record(project_id, member_id, score):
 
 st.title("🏆 Update คะแนนแรงค์ Season2")
 st.write("ระบบคำนวณคะแนนอัตโนมัติตามลำดับใน Excel")
-st.write("บรรทัดแรกสุด(ชื่องานแข่ง)ให้เอาจาก>> https://docs.google.com/spreadsheets/d/1DPklisqF-ykQtKgg2h2AH-Q5ePN30zr1lNm9EaRjvg4/edit?usp=sharing")
+st.write("บรรทัดแรกสุด(ชื่องานแข่ง)ให้เอาจาก>> https://auspicious-tarsier-51c.notion.site/26fe6d24b97d80e1bdb3c2452a31694c?v=26fe6d24b97d813a9d8f000c8ed5dc7b&source=copy_link")
+st.write("ตัวอย่าง Template ให้เอาจาก>> https://docs.google.com/spreadsheets/d/1DPklisqF-ykQtKgg2h2AH-Q5ePN30zr1lNm9EaRjvg4/edit?gid=0#gid=0")
 
 uploaded_file = st.file_uploader("เลือกไฟล์ Excel (.xlsx)", type=['xlsx'])
 
