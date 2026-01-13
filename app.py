@@ -124,7 +124,7 @@ def create_history_record(project_id, member_id, score):
 
 # ================= UI PART =================
 
-st.title("🏆 Notion Competition Importer (Auto Score)")
+st.title("🏆 Update คะแนนแรงค์ Season2")
 st.write("ระบบคำนวณคะแนนอัตโนมัติตามลำดับใน Excel")
 
 uploaded_file = st.file_uploader("เลือกไฟล์ Excel (.xlsx)", type=['xlsx'])
