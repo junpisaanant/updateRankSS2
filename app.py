@@ -75,7 +75,6 @@ def find_member_smart(raw_text, members_list):
             return member['name'], member
     return None, None
 
-# 🔥 แก้ไข: กลับมาใช้ Regex เช็คชื่อ (YYYY-MM-DD นำหน้า) เพื่อจัดกลุ่ม
 @st.cache_data(ttl=300)
 def get_all_projects_list():
     url = f"https://api.notion.com/v1/databases/{PROJECT_DB_ID}/query"
@@ -83,7 +82,6 @@ def get_all_projects_list():
     has_more = True; next_cursor = None
     
     while has_more:
-        # Sort Notion: เอาวันล่าสุดมาก่อน (เป็น Base)
         payload = { "sorts": [ { "property": "วันที่จัดกิจกรรม", "direction": "descending" } ] }
         if next_cursor: payload["start_cursor"] = next_cursor
         try:
@@ -92,7 +90,7 @@ def get_all_projects_list():
                 try:
                     props = page.get('properties', {})
                     
-                    # 1. Filter Status & Capture Meta (สำหรับปุ่มปิดงาน)
+                    # 1. Filter Status & Capture Meta
                     status_val = ""
                     status_prop_name = "Status" if "Status" in props else "สถานะ"
                     status_prop = props.get(status_prop_name)
@@ -105,7 +103,6 @@ def get_all_projects_list():
                         elif status_type == 'status' and status_prop['status']: 
                             status_val = status_prop['status']['name']
                     
-                    # กรอง "ปิดรับสมัครแล้ว" ออก
                     if status_val == "ปิดรับสมัครแล้ว": continue
 
                     title = props["ชื่อกิจกรรม"]["title"][0]["text"]["content"]
@@ -116,7 +113,6 @@ def get_all_projects_list():
                         if pt['type'] == 'select' and pt['select']: event_type = pt['select']['name']
                         elif pt['type'] == 'multi_select' and pt['multi_select']: event_type = pt['multi_select'][0]['name']
                     
-                    # เก็บข้อมูล
                     raw_items.append({
                         "title": title,
                         "data": { 
@@ -132,10 +128,6 @@ def get_all_projects_list():
             next_cursor = res.get("next_cursor")
         except: break
     
-    # 🔥 Logic จัดกลุ่มตามชื่อ (Regex)
-    # 1. กลุ่มที่มีวันที่นำหน้า (Format: 2025-01-18 ...)
-    # 2. กลุ่มอื่นๆ (Coming Soon, Unknown ...)
-    
     date_prefix_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}")
     
     group_date_prefix = []
@@ -147,13 +139,9 @@ def get_all_projects_list():
         else:
             group_others.append(item)
             
-    # เรียงกลุ่มวันที่: มากไปน้อย (Z->A) ซึ่งจะเท่ากับ วันที่ล่าสุด->อดีต
     group_date_prefix.sort(key=lambda x: x['title'], reverse=True)
-    
-    # เรียงกลุ่มอื่นๆ: มากไปน้อย (หรือจะน้อยไปมากก็ได้ แล้วแต่ชอบ)
     group_others.sort(key=lambda x: x['title'], reverse=True)
     
-    # รวมร่าง: วันที่นำหน้าอยู่บนสุด, อื่นๆ อยู่ล่าง
     final_dict = {}
     for item in group_date_prefix:
         final_dict[item['title']] = item['data']
@@ -304,8 +292,8 @@ tab1, tab2 = st.tabs(["⚡ อัปเดตจาก Challonge", "🏅 อั�
 # --- TAB 1: CHALLONGE SCORE & GIANT KILLING ---
 with tab1:
     st.header("⚡ อัปเดตจาก Challonge (Rank + Bonus)")
-    st.write("1. ให้คะแนนตามอันดับ และผู้เข้าร่วมทุกคน")
-    st.write("2. เช็คการล้มยักษ์ (Bonus +5)")
+    st.write("1. ให้คะแนนตามอันดับ และผู้เข้าร่วมทุกคน (งานย่อยแต้มหารครึ่ง)")
+    st.write("2. เช็คการล้มยักษ์ (Bonus +5 / งานย่อย +3)")
     st.write("3. **ปิดรับสมัคร** งานแข่งให้อัตโนมัติ")
     
     if not CHALLONGE_API_KEY:
@@ -317,7 +305,6 @@ with tab1:
         with col_c2:
             with st.spinner("โหลดรายชื่อกิจกรรม..."):
                 projects_map = get_all_projects_list()
-            # Dropdown เรียงตามชื่อ (YYYY-MM-DD นำหน้าอยู่บน, อื่นๆ อยู่ล่าง)
             selected_project_name = st.selectbox("เลือกงานแข่ง (จาก Notion)", options=list(projects_map.keys()) if projects_map else [])
 
         if st.button("🚀 ประมวลผลและปิดงาน", type="primary"):
@@ -373,9 +360,13 @@ with tab1:
                         l_name, l_data = find_member_smart(raw_lose, all_members)
                         if w_data and l_data:
                             if w_data['score'] <= 99 and l_data['score'] >= 100:
+                                # 🔥 Logic ใหม่: งานย่อยหารครึ่ง (5 -> 3)
+                                bonus = 5
+                                if is_minor: bonus = math.ceil(5 / 2)
+                                
                                 rec_name = f"Bonus: ล้มยักษ์ (ชนะ {l_name})"
-                                create_history_record(project_id, w_data['id'], 5, rec_name)
-                                gk_logs.append(f"🔥 {w_name} ({w_data['score']}) ชนะ {l_name} ({l_data['score']}) -> +5")
+                                create_history_record(project_id, w_data['id'], bonus, rec_name)
+                                gk_logs.append(f"🔥 {w_name} ({w_data['score']}) ชนะ {l_name} ({l_data['score']}) -> +{bonus}")
                                 gk_success += 1
                         gk_prog.progress((i + 1) / total_m)
                         time.sleep(0.02)
