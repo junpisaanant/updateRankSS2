@@ -6,7 +6,7 @@ import traceback
 import math  # เพิ่มมาเพื่อใช้คำสั่งปัดเศษขึ้น (ceil)
 
 # ================= CONFIGURATION =================
-NOTION_TOKEN = "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"
+NOTION_TOKEN = st.secrets["NOTION_TOKEN"]
 
 MEMBER_DB_ID = "271e6d24b97d80289175eef889a90a09" 
 HISTORY_DB_ID = "2b1e6d24b97d803786c2ec7011c995ef"
@@ -202,3 +202,4 @@ if uploaded_file is not None:
     except Exception as e:
         st.error("เกิดข้อผิดพลาด:")
         st.code(traceback.format_exc())
+
