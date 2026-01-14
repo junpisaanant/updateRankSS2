@@ -3,10 +3,14 @@ import pandas as pd
 import requests
 import time
 import traceback
-import math  # เพิ่มมาเพื่อใช้คำสั่งปัดเศษขึ้น (ceil)
+import math 
 
 # ================= CONFIGURATION =================
-NOTION_TOKEN = st.secrets["NOTION_TOKEN"]
+try:
+    NOTION_TOKEN = st.secrets["NOTION_TOKEN"]
+except FileNotFoundError:
+    # กรณีรันในเครื่องแล้วลืมสร้าง secrets.toml (ใส่ Token ชั่วคราวตรงนี้ได้ถ้าจำเป็น)
+    NOTION_TOKEN = "YOUR_TOKEN_HERE"
 
 MEMBER_DB_ID = "271e6d24b97d80289175eef889a90a09" 
 HISTORY_DB_ID = "2b1e6d24b97d803786c2ec7011c995ef"
@@ -62,9 +66,8 @@ def get_project_info(project_name):
             page = data['results'][0]
             project_id = page['id']
             
-            # พยายามดึงค่าจากคอลัมน์ "ประเภทงาน"
-            # (รองรับทั้งแบบ Select และ Multi-select)
-            event_type = "ทั่วไป" # ค่า Default
+            # ดึงประเภทงาน
+            event_type = "ทั่วไป"
             props = page.get('properties', {})
             
             if 'ประเภทงาน' in props:
@@ -82,38 +85,41 @@ def get_project_info(project_name):
         return None
 
 def calculate_score(row_index, is_minor_event):
-    """
-    คำนวณคะแนนตามบรรทัด (row_index เริ่มที่ 1 คือบรรทัดที่ 2 ใน Excel)
-    """
     score = 0
-    
     # เกณฑ์คะแนนปกติ
-    if row_index == 1:      # บรรทัด 2
-        score = 25
-    elif row_index == 2:    # บรรทัด 3
-        score = 20
-    elif 3 <= row_index <= 4:   # บรรทัด 4-5
-        score = 16
-    elif 5 <= row_index <= 8:   # บรรทัด 6-9
-        score = 10
-    elif 9 <= row_index <= 16:  # บรรทัด 10-17
-        score = 5
-    else:                   # บรรทัด 17 เป็นต้นไป
-        score = 2
+    if row_index == 1: score = 25
+    elif row_index == 2: score = 20
+    elif 3 <= row_index <= 4: score = 16
+    elif 5 <= row_index <= 8: score = 10
+    elif 9 <= row_index <= 16: score = 5
+    else: score = 2
 
-    # เกณฑ์งานย่อย (หาร 2 เฉพาะบรรทัด 2-16)
+    # เกณฑ์งานย่อย
     if is_minor_event and row_index <= 15:
-        score = math.ceil(score / 2) # หาร 2 แล้วปัดเศษขึ้น
+        score = math.ceil(score / 2)
         
     return score
 
-def create_history_record(project_id, member_id, score):
+# ⚠️ แก้ไขจุดที่ 1: รับ project_name เพิ่มเข้ามา
+def create_history_record(project_id, member_id, score, project_name):
     url = "https://api.notion.com/v1/pages"
+    
     properties = {
+        # ⚠️ แก้ไขจุดที่ 2: เพิ่มการบันทึก Title (Name)
+        "Name": { 
+            "title": [
+                {
+                    "text": {
+                        "content": str(project_name)
+                    }
+                }
+            ]
+        },
         "สมาชิกแรงค์": { "relation": [{"id": member_id}] },
         "ชื่องานแข่ง": { "relation": [{"id": project_id}] },
         "คะแนนที่บวก": { "number": float(score) }
     }
+    
     payload = {"parent": {"database_id": HISTORY_DB_ID}, "properties": properties}
     response = requests.post(url, json=payload, headers=headers)
     
@@ -126,8 +132,6 @@ def create_history_record(project_id, member_id, score):
 
 st.title("🏆 Update คะแนนแรงค์ Season2")
 st.write("ระบบคำนวณคะแนนอัตโนมัติตามลำดับใน Excel")
-st.write("บรรทัดแรกสุด(ชื่องานแข่ง)ให้เอาจาก>> https://auspicious-tarsier-51c.notion.site/26fe6d24b97d80e1bdb3c2452a31694c?v=26fe6d24b97d813a9d8f000c8ed5dc7b&source=copy_link")
-st.write("ตัวอย่าง Template ให้เอาจาก>> https://docs.google.com/spreadsheets/d/1DPklisqF-ykQtKgg2h2AH-Q5ePN30zr1lNm9EaRjvg4/edit?gid=0#gid=0")
 
 uploaded_file = st.file_uploader("เลือกไฟล์ Excel (.xlsx)", type=['xlsx'])
 
@@ -145,7 +149,6 @@ if uploaded_file is not None:
             status_box = st.empty()
             status_box.text("กำลังตรวจสอบประเภทงาน...")
             
-            # 1. หาข้อมูล Project และประเภทงาน
             project_info = get_project_info(project_name_raw)
             
             if not project_info:
@@ -153,43 +156,34 @@ if uploaded_file is not None:
             else:
                 project_id = project_info['id']
                 event_type = project_info['type']
-                
-                # เช็คว่าเป็นงานย่อยไหม
                 is_minor = "งานย่อย" in str(event_type)
                 
-                # แสดงผลให้ผู้ใช้เห็นชัดๆ
                 if is_minor:
-                    st.warning(f"⚠️ ตรวจพบประเภทงาน: **'{event_type}'** (ระบบจะหารคะแนนตามกฎงานย่อย)")
+                    st.warning(f"⚠️ ตรวจพบประเภทงาน: **'{event_type}'** (ระบบจะหารคะแนน)")
                 else:
                     st.success(f"✅ ตรวจพบประเภทงาน: **'{event_type}'** (คิดคะแนนเต็ม)")
                 
                 progress_bar = st.progress(0)
-                data_rows = df.iloc[1:] # ตัดบรรทัดชื่อ Project ออก
+                data_rows = df.iloc[1:]
                 total_rows = len(data_rows)
                 count_success = 0
                 
-                # เริ่มวนลูป
                 for i, (index, row) in enumerate(data_rows.iterrows()):
-                    # index ใน dataframe นี้เริ่มที่ 1 (เพราะเราตัดแถว 0 ออก)
-                    # ซึ่ง index 1 ตรงกับ "บรรทัดที่ 2" ใน Excel พอดีเป๊ะ
                     excel_row_num = index 
-                    
                     raw_name = row[0]
                     if pd.isna(raw_name): continue
                     
                     clean_name = str(raw_name).split('-')[0].strip()
-                    
-                    # คำนวณคะแนน (ไม่ต้องอ่านจาก Excel แล้ว)
                     calculated_score = calculate_score(excel_row_num, is_minor)
                     
-                    status_box.text(f"Processing ({i+1}/{total_rows}): {clean_name} -> {calculated_score} คะแนน")
+                    status_box.text(f"Processing ({i+1}/{total_rows}): {clean_name}")
                     
                     member_id = get_member_id(raw_name)
                     
                     if member_id:
-                        if create_history_record(project_id, member_id, calculated_score):
+                        # ⚠️ แก้ไขจุดที่ 3: ส่ง project_name_raw เข้าไปด้วย
+                        if create_history_record(project_id, member_id, calculated_score, project_name_raw):
                             count_success += 1
-                        # Error จะเด้งเองจากฟังก์ชัน
                     else:
                         st.warning(f"⚠️ ไม่พบสมาชิก: {clean_name}")
                     
@@ -202,4 +196,3 @@ if uploaded_file is not None:
     except Exception as e:
         st.error("เกิดข้อผิดพลาด:")
         st.code(traceback.format_exc())
-
