@@ -4,6 +4,7 @@ import requests
 import time
 import traceback
 import math
+import re
 from datetime import datetime, date
 
 # ================= CONFIGURATION =================
@@ -74,31 +75,93 @@ def find_member_smart(raw_text, members_list):
             return member['name'], member
     return None, None
 
+# 🔥 แก้ไข: กลับมาใช้ Regex เช็คชื่อ (YYYY-MM-DD นำหน้า) เพื่อจัดกลุ่ม
 @st.cache_data(ttl=300)
 def get_all_projects_list():
     url = f"https://api.notion.com/v1/databases/{PROJECT_DB_ID}/query"
-    projects = {} 
+    raw_items = []
     has_more = True; next_cursor = None
+    
     while has_more:
+        # Sort Notion: เอาวันล่าสุดมาก่อน (เป็น Base)
         payload = { "sorts": [ { "property": "วันที่จัดกิจกรรม", "direction": "descending" } ] }
         if next_cursor: payload["start_cursor"] = next_cursor
         try:
             res = requests.post(url, json=payload, headers=headers).json()
             for page in res.get("results", []):
                 try:
-                    title = page["properties"]["ชื่อกิจกรรม"]["title"][0]["text"]["content"]
-                    event_type = "ทั่วไป"
                     props = page.get('properties', {})
+                    
+                    # 1. Filter Status & Capture Meta (สำหรับปุ่มปิดงาน)
+                    status_val = ""
+                    status_prop_name = "Status" if "Status" in props else "สถานะ"
+                    status_prop = props.get(status_prop_name)
+                    status_type = "status"
+                    
+                    if status_prop:
+                        status_type = status_prop['type']
+                        if status_type == 'select' and status_prop['select']: 
+                            status_val = status_prop['select']['name']
+                        elif status_type == 'status' and status_prop['status']: 
+                            status_val = status_prop['status']['name']
+                    
+                    # กรอง "ปิดรับสมัครแล้ว" ออก
+                    if status_val == "ปิดรับสมัครแล้ว": continue
+
+                    title = props["ชื่อกิจกรรม"]["title"][0]["text"]["content"]
+                    
+                    event_type = "ทั่วไป"
                     if 'ประเภทงาน' in props:
                         pt = props['ประเภทงาน']
                         if pt['type'] == 'select' and pt['select']: event_type = pt['select']['name']
                         elif pt['type'] == 'multi_select' and pt['multi_select']: event_type = pt['multi_select'][0]['name']
-                    projects[title] = { "id": page["id"], "type": event_type }
+                    
+                    # เก็บข้อมูล
+                    raw_items.append({
+                        "title": title,
+                        "data": { 
+                            "id": page["id"], 
+                            "type": event_type,
+                            "status_meta": { "name": status_prop_name, "type": status_type }
+                        }
+                    })
+                    
                 except: pass
+                
             has_more = res.get("has_more", False)
             next_cursor = res.get("next_cursor")
         except: break
-    return projects
+    
+    # 🔥 Logic จัดกลุ่มตามชื่อ (Regex)
+    # 1. กลุ่มที่มีวันที่นำหน้า (Format: 2025-01-18 ...)
+    # 2. กลุ่มอื่นๆ (Coming Soon, Unknown ...)
+    
+    date_prefix_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}")
+    
+    group_date_prefix = []
+    group_others = []
+    
+    for item in raw_items:
+        if date_prefix_pattern.match(item['title']):
+            group_date_prefix.append(item)
+        else:
+            group_others.append(item)
+            
+    # เรียงกลุ่มวันที่: มากไปน้อย (Z->A) ซึ่งจะเท่ากับ วันที่ล่าสุด->อดีต
+    group_date_prefix.sort(key=lambda x: x['title'], reverse=True)
+    
+    # เรียงกลุ่มอื่นๆ: มากไปน้อย (หรือจะน้อยไปมากก็ได้ แล้วแต่ชอบ)
+    group_others.sort(key=lambda x: x['title'], reverse=True)
+    
+    # รวมร่าง: วันที่นำหน้าอยู่บนสุด, อื่นๆ อยู่ล่าง
+    final_dict = {}
+    for item in group_date_prefix:
+        final_dict[item['title']] = item['data']
+        
+    for item in group_others:
+        final_dict[item['title']] = item['data']
+    
+    return final_dict
 
 def calculate_score(row_index, is_minor_event):
     score = 0
@@ -108,7 +171,7 @@ def calculate_score(row_index, is_minor_event):
     elif 5 <= row_index <= 8: score = 10
     elif 9 <= row_index <= 16: score = 5
     else: score = 2
-    if is_minor_event and row_index <= 15: score = math.ceil(score / 2)
+    if is_minor_event: score = math.ceil(score / 2)
     return score
 
 def create_history_record(project_id, member_id, score, record_name):
@@ -122,6 +185,18 @@ def create_history_record(project_id, member_id, score, record_name):
     payload = {"parent": {"database_id": HISTORY_DB_ID}, "properties": properties}
     requests.post(url, json=payload, headers=headers)
     return True
+
+def update_project_status(page_id, prop_name, prop_type, new_status):
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    prop_data = { "name": new_status }
+    if prop_type == "select":
+        payload = { "properties": { prop_name: { "select": prop_data } } }
+    else:
+        payload = { "properties": { prop_name: { "status": prop_data } } }
+    try:
+        res = requests.patch(url, json=payload, headers=headers)
+        return res.status_code == 200
+    except: return False
 
 def get_season2_stats_data():
     target_start = date(2026, 1, 1)
@@ -224,15 +299,14 @@ def get_challonge_full_data(tournament_id, api_key):
 st.set_page_config(page_title="Rank & Lomyak System", page_icon="⚔️", layout="wide")
 st.title("⚔️ Rank & Giant Killing System")
 
-# เหลือ 2 Tabs หลัก
 tab1, tab2 = st.tabs(["⚡ อัปเดตจาก Challonge", "🏅 อัปเดตอันดับ & สถิติ"])
 
 # --- TAB 1: CHALLONGE SCORE & GIANT KILLING ---
 with tab1:
     st.header("⚡ อัปเดตจาก Challonge (Rank + Bonus)")
-    st.write("ระบบจะทำ 2 อย่างอัตโนมัติ:")
-    st.write("1. **ให้คะแนนตามอันดับ** (ที่ 1-16) สำหรับผู้เข้าแข่งขันทุกคน")
-    st.write("2. **เช็คการล้มยักษ์** (Bonus +5) จากผลการแข่งทุกคู่")
+    st.write("1. ให้คะแนนตามอันดับ และผู้เข้าร่วมทุกคน")
+    st.write("2. เช็คการล้มยักษ์ (Bonus +5)")
+    st.write("3. **ปิดรับสมัคร** งานแข่งให้อัตโนมัติ")
     
     if not CHALLONGE_API_KEY:
         st.error("⚠️ ไม่พบ CHALLONGE_API_KEY")
@@ -243,32 +317,33 @@ with tab1:
         with col_c2:
             with st.spinner("โหลดรายชื่อกิจกรรม..."):
                 projects_map = get_all_projects_list()
+            # Dropdown เรียงตามชื่อ (YYYY-MM-DD นำหน้าอยู่บน, อื่นๆ อยู่ล่าง)
             selected_project_name = st.selectbox("เลือกงานแข่ง (จาก Notion)", options=list(projects_map.keys()) if projects_map else [])
 
-        if st.button("🚀 ประมวลผลและบันทึก", type="primary"):
+        if st.button("🚀 ประมวลผลและปิดงาน", type="primary"):
             if not challonge_id_score or not selected_project_name:
                 st.error("กรุณากรอกข้อมูลให้ครบถ้วน")
             else:
                 proj_data = projects_map.get(selected_project_name)
                 project_id = proj_data['id']
                 is_minor = "งานย่อย" in str(proj_data['type'])
+                status_meta = proj_data.get('status_meta', {'name': 'Status', 'type': 'status'})
                 
                 status_box = st.empty()
-                
-                status_box.info("1/4 📥 ดึงข้อมูล Challonge...")
+                status_box.info("1/5 📥 ดึงข้อมูล Challonge...")
                 chal_data, err = get_challonge_full_data(challonge_id_score, CHALLONGE_API_KEY)
                 
                 if err: st.error(err)
                 elif not chal_data['participants']: st.warning("ไม่พบข้อมูลผู้แข่งขัน")
                 else:
-                    status_box.info("2/4 👥 ดึงข้อมูลสมาชิก Notion...")
+                    status_box.info("2/5 👥 ดึงข้อมูลสมาชิก Notion...")
                     all_members = fetch_all_members_data()
                     
                     rank_logs = []
                     gk_logs = []
                     
                     # --- Phase 3: Rank Score ---
-                    status_box.info("3/4 🧮 คำนวณคะแนนอันดับ...")
+                    status_box.info("3/5 🧮 คำนวณคะแนนอันดับ...")
                     rank_prog = st.progress(0)
                     total_p = len(chal_data['participants'])
                     rank_success = 0
@@ -286,7 +361,7 @@ with tab1:
                         time.sleep(0.02)
                         
                     # --- Phase 4: Giant Killing ---
-                    status_box.info("4/4 👹 เช็คโบนัสล้มยักษ์...")
+                    status_box.info("4/5 👹 เช็คโบนัสล้มยักษ์...")
                     gk_prog = st.progress(0)
                     total_m = len(chal_data['matches'])
                     gk_success = 0
@@ -296,7 +371,6 @@ with tab1:
                         raw_lose = chal_data['participants'][m['loser_id']]['name']
                         w_name, w_data = find_member_smart(raw_win, all_members)
                         l_name, l_data = find_member_smart(raw_lose, all_members)
-                        
                         if w_data and l_data:
                             if w_data['score'] <= 99 and l_data['score'] >= 100:
                                 rec_name = f"Bonus: ล้มยักษ์ (ชนะ {l_name})"
@@ -306,6 +380,14 @@ with tab1:
                         gk_prog.progress((i + 1) / total_m)
                         time.sleep(0.02)
                     
+                    # --- Phase 5: Close Project ---
+                    status_box.info(f"5/5 🔒 ปิดรับสมัครงาน: {selected_project_name} ...")
+                    if update_project_status(project_id, status_meta['name'], status_meta['type'], "ปิดรับสมัครแล้ว"):
+                        st.toast(f"🔒 ปิดงาน '{selected_project_name}' แล้ว!", icon="✅")
+                        get_all_projects_list.clear()
+                    else:
+                        st.error("❌ อัปเดตสถานะงานไม่สำเร็จ")
+
                     status_box.empty()
                     st.success("🎉 ทำรายการเสร็จสิ้น!")
                     
