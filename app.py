@@ -422,7 +422,8 @@ with tab2:
                 progress_rank.progress((i + 1) / total_members)
                 time.sleep(0.05) 
             status_rank.empty()
-            st.success(f"🎉 อัปเดตเสร็จสิ้น! สำเร็จ {success_count}/{total_members})
+            st.success(f"🎉 อัปเดตเสร็จสิ้น! สำเร็จ {success_count}/{total_members}")
+
 
 import streamlit as st
 import requests
@@ -479,4 +480,5 @@ if st.button("🔍 ตรวจสอบงาน 'skh0936a'"):
 
     except Exception as e:
         st.error(f"Error: {e}")
+
 
