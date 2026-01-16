@@ -423,3 +423,48 @@ with tab2:
                 time.sleep(0.05) 
             status_rank.empty()
             st.success(f"🎉 อัปเดตเสร็จสิ้น! สำเร็จ {success_count}/{total_members} คน")
+
+# --- 🛠️ โค้ดสำหรับหาเลข ID (แปะชั่วคราวเพื่อดูเลข) ---
+import streamlit as st
+import requests
+
+st.divider()
+st.subheader("🔍 เครื่องมือค้นหาเลข ID งานแข่ง")
+
+# ใช้ Key ของ M ที่คุณตูนมีอยู่ (2dgAKR...)
+api_key = st.secrets["CHALLONGE_API_KEY"] 
+
+if st.button("กดปุ่มนี้ เพื่อค้นหางานแข่งทั้งหมดของ M"):
+    try:
+        url = "https://api.challonge.com/v1/tournaments.json"
+        params = {"api_key": api_key, "state": "all"}
+        res = requests.get(url, params=params)
+        
+        if res.status_code == 200:
+            tournaments = res.json()
+            st.success(f"✅ เจองานแข่งทั้งหมด {len(tournaments)} งาน")
+            
+            found = False
+            for t in tournaments:
+                tourney = t['tournament']
+                # กรองหางานที่ชื่อคล้าย skh0936a
+                if "skh0936a" in tourney['url']:
+                    st.error(f"🎉 เจอแล้ว!!")
+                    st.write(f"📌 **ชื่องาน:** {tourney['name']}")
+                    st.write(f"🔗 **URL:** {tourney['url']}")
+                    st.markdown(f"### 👉 **เลข ID ที่ต้องใช้คือ:** `{tourney['id']}`") 
+                    st.caption("(ให้ก๊อปปี้เลขนี้ไปใส่ในช่อง Challonge ID แทนคำว่า skh0936a)")
+                    found = True
+                    break
+            
+            if not found:
+                st.warning("⚠️ ไม่เจองาน skh0936a ในรายการ (อาจจะอยู่คนละบัญชี หรือ Key ผิด)")
+                # แสดงรายการทั้งหมดเผื่อดูผ่านตา
+                with st.expander("ดูรายการงานแข่งทั้งหมดของ Key นี้"):
+                    for t in tournaments:
+                        st.write(f"- {t['tournament']['name']} (ID: {t['tournament']['id']})")
+        else:
+            st.error(f"เชื่อมต่อไม่ได้ Error: {res.status_code}")
+    except Exception as e:
+        st.error(f"Error: {e}")
+
