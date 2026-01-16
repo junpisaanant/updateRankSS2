@@ -422,49 +422,60 @@ with tab2:
                 progress_rank.progress((i + 1) / total_members)
                 time.sleep(0.05) 
             status_rank.empty()
-            st.success(f"🎉 อัปเดตเสร็จสิ้น! สำเร็จ {success_count}/{total_members} คน")
+            st.success(f"🎉 อัปเดตเสร็จสิ้น! สำเร็จ {success_count}/{total_members} 
 
-# --- 🛠️ โค้ดสำหรับหาเลข ID (แปะชั่วคราวเพื่อดูเลข) ---
 import streamlit as st
 import requests
 
 st.divider()
-st.subheader("🔍 เครื่องมือค้นหาเลข ID งานแข่ง")
+st.subheader("🎯 ตรวจสอบสถานะงานแข่ง (แบบเจาะจง)")
 
-# ใช้ Key ของ M ที่คุณตูนมีอยู่ (2dgAKR...)
+# ใช้ Key ของ M ที่คุณตูนใส่ไว้ (335Cb...)
 api_key = st.secrets["CHALLONGE_API_KEY"] 
+target_slug = "skh0936a"  # ชื่อที่เราสงสัย
 
-if st.button("กดปุ่มนี้ เพื่อค้นหางานแข่งทั้งหมดของ M"):
+if st.button("🔍 ตรวจสอบงาน 'skh0936a'"):
+    # ลองยิงไปที่งานนี้โดยตรง (ไม่ต้องดึงทั้งหมด)
+    url = f"https://api.challonge.com/v1/tournaments/{target_slug}.json"
+    params = {"api_key": api_key, "include_participants": 0}
+    
     try:
-        url = "https://api.challonge.com/v1/tournaments.json"
-        params = {"api_key": api_key, "state": "all"}
+        st.write(f"กำลังติดต่อไปที่: `{target_slug}` ...")
         res = requests.get(url, params=params)
         
         if res.status_code == 200:
-            tournaments = res.json()
-            st.success(f"✅ เจองานแข่งทั้งหมด {len(tournaments)} งาน")
+            # ✅ เจอแล้ว!
+            data = res.json()
+            t = data['tournament']
+            st.success("🎉 เจอแล้วครับ! เชื่อมต่อได้สำเร็จ")
+            st.write(f"📌 **ชื่อ:** {t['name']}")
+            st.write(f"🔗 **URL:** {t['full_challonge_url']}")
+            st.code(t['id'], language="text")
+            st.caption("👆 นี่คือเลข ID (Numeric ID) ของจริง! ก๊อปเลขนี้ไปใช้ได้เลย")
             
-            found = False
-            for t in tournaments:
-                tourney = t['tournament']
-                # กรองหางานที่ชื่อคล้าย skh0936a
-                if "skh0936a" in tourney['url']:
-                    st.error(f"🎉 เจอแล้ว!!")
-                    st.write(f"📌 **ชื่องาน:** {tourney['name']}")
-                    st.write(f"🔗 **URL:** {tourney['url']}")
-                    st.markdown(f"### 👉 **เลข ID ที่ต้องใช้คือ:** `{tourney['id']}`") 
-                    st.caption("(ให้ก๊อปปี้เลขนี้ไปใส่ในช่อง Challonge ID แทนคำว่า skh0936a)")
-                    found = True
-                    break
+        elif res.status_code == 404:
+            # ❌ ไม่เจอ -> ลองเดาว่าเป็นของ Monkey King
+            st.error("❌ ไม่พบ ID: skh0936a (404 Not Found)")
+            st.info("💡 กำลังลองค้นหาแบบ 'monkeyking-skh0936a' ให้แทน...")
             
-            if not found:
-                st.warning("⚠️ ไม่เจองาน skh0936a ในรายการ (อาจจะอยู่คนละบัญชี หรือ Key ผิด)")
-                # แสดงรายการทั้งหมดเผื่อดูผ่านตา
-                with st.expander("ดูรายการงานแข่งทั้งหมดของ Key นี้"):
-                    for t in tournaments:
-                        st.write(f"- {t['tournament']['name']} (ID: {t['tournament']['id']})")
+            # ลองครั้งที่ 2 (เติม monkeyking-)
+            url2 = f"https://api.challonge.com/v1/tournaments/monkeyking-{target_slug}.json"
+            res2 = requests.get(url2, params=params)
+            
+            if res2.status_code == 200:
+                data2 = res2.json()
+                t2 = data2['tournament']
+                st.success("🎉 เจอในชื่อ Monkey King ครับ!")
+                st.code(t2['id'], language="text")
+                st.caption("👆 ใช้เลขนี้แทนนะครับ")
+            else:
+                st.error(f"❌ ยังไม่เจอครับ (Error: {res2.status_code}) - ลองเช็คว่า Key ถูกต้องจริงไหม")
+
+        elif res.status_code == 401:
+            st.error("🔑 API Key ผิดครับ (Unauthorized) - รบกวนเช็คใน Secrets ว่ามีเว้นวรรคเกินมาไหม")
+            
         else:
-            st.error(f"เชื่อมต่อไม่ได้ Error: {res.status_code}")
+            st.error(f"⚠️ Error แปลกๆ: {res.status_code} - {res.text}")
+
     except Exception as e:
         st.error(f"Error: {e}")
-
