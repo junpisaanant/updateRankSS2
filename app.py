@@ -4,7 +4,6 @@ import requests
 import time
 import traceback
 import math
-import re
 from datetime import datetime, date
 
 # ================= CONFIGURATION =================
@@ -75,12 +74,30 @@ def find_member_smart(raw_text, members_list):
             return member['name'], member
     return None, None
 
+def get_project_info(project_name):
+    url = f"https://api.notion.com/v1/databases/{PROJECT_DB_ID}/query"
+    payload = {"filter": {"property": "ชื่อกิจกรรม", "title": {"contains": str(project_name).strip()}}}
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        data = response.json()
+        if data.get('results'):
+            page = data['results'][0]
+            project_id = page['id']
+            event_type = "ทั่วไป"
+            props = page.get('properties', {})
+            if 'ประเภทงาน' in props:
+                prop = props['ประเภทงาน']
+                if prop['type'] == 'select' and prop['select']: event_type = prop['select']['name']
+                elif prop['type'] == 'multi_select' and prop['multi_select']: event_type = prop['multi_select'][0]['name']
+            return {"id": project_id, "type": event_type}
+        return None
+    except: return None
+
 @st.cache_data(ttl=300)
 def get_all_projects_list():
     url = f"https://api.notion.com/v1/databases/{PROJECT_DB_ID}/query"
-    raw_items = []
+    projects = {} 
     has_more = True; next_cursor = None
-    
     while has_more:
         payload = { "sorts": [ { "property": "วันที่จัดกิจกรรม", "direction": "descending" } ] }
         if next_cursor: payload["start_cursor"] = next_cursor
@@ -88,68 +105,19 @@ def get_all_projects_list():
             res = requests.post(url, json=payload, headers=headers).json()
             for page in res.get("results", []):
                 try:
-                    props = page.get('properties', {})
-                    
-                    # 1. Filter Status & Capture Meta
-                    status_val = ""
-                    status_prop_name = "Status" if "Status" in props else "สถานะ"
-                    status_prop = props.get(status_prop_name)
-                    status_type = "status"
-                    
-                    if status_prop:
-                        status_type = status_prop['type']
-                        if status_type == 'select' and status_prop['select']: 
-                            status_val = status_prop['select']['name']
-                        elif status_type == 'status' and status_prop['status']: 
-                            status_val = status_prop['status']['name']
-                    
-                    if status_val == "ปิดรับสมัครแล้ว": continue
-
-                    title = props["ชื่อกิจกรรม"]["title"][0]["text"]["content"]
-                    
+                    title = page["properties"]["ชื่อกิจกรรม"]["title"][0]["text"]["content"]
                     event_type = "ทั่วไป"
+                    props = page.get('properties', {})
                     if 'ประเภทงาน' in props:
                         pt = props['ประเภทงาน']
                         if pt['type'] == 'select' and pt['select']: event_type = pt['select']['name']
                         elif pt['type'] == 'multi_select' and pt['multi_select']: event_type = pt['multi_select'][0]['name']
-                    
-                    raw_items.append({
-                        "title": title,
-                        "data": { 
-                            "id": page["id"], 
-                            "type": event_type,
-                            "status_meta": { "name": status_prop_name, "type": status_type }
-                        }
-                    })
-                    
+                    projects[title] = { "id": page["id"], "type": event_type }
                 except: pass
-                
             has_more = res.get("has_more", False)
             next_cursor = res.get("next_cursor")
         except: break
-    
-    date_prefix_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}")
-    
-    group_date_prefix = []
-    group_others = []
-    
-    for item in raw_items:
-        if date_prefix_pattern.match(item['title']):
-            group_date_prefix.append(item)
-        else:
-            group_others.append(item)
-            
-    group_date_prefix.sort(key=lambda x: x['title'], reverse=True)
-    group_others.sort(key=lambda x: x['title'], reverse=True)
-    
-    final_dict = {}
-    for item in group_date_prefix:
-        final_dict[item['title']] = item['data']
-        
-    for item in group_others:
-        final_dict[item['title']] = item['data']
-    
-    return final_dict
+    return projects
 
 def calculate_score(row_index, is_minor_event):
     score = 0
@@ -159,7 +127,7 @@ def calculate_score(row_index, is_minor_event):
     elif 5 <= row_index <= 8: score = 10
     elif 9 <= row_index <= 16: score = 5
     else: score = 2
-    if is_minor_event: score = math.ceil(score / 2)
+    if is_minor_event and row_index <= 15: score = math.ceil(score / 2)
     return score
 
 def create_history_record(project_id, member_id, score, record_name):
@@ -173,18 +141,6 @@ def create_history_record(project_id, member_id, score, record_name):
     payload = {"parent": {"database_id": HISTORY_DB_ID}, "properties": properties}
     requests.post(url, json=payload, headers=headers)
     return True
-
-def update_project_status(page_id, prop_name, prop_type, new_status):
-    url = f"https://api.notion.com/v1/pages/{page_id}"
-    prop_data = { "name": new_status }
-    if prop_type == "select":
-        payload = { "properties": { prop_name: { "select": prop_data } } }
-    else:
-        payload = { "properties": { prop_name: { "status": prop_data } } }
-    try:
-        res = requests.patch(url, json=payload, headers=headers)
-        return res.status_code == 200
-    except: return False
 
 def get_season2_stats_data():
     target_start = date(2026, 1, 1)
@@ -287,14 +243,15 @@ def get_challonge_full_data(tournament_id, api_key):
 st.set_page_config(page_title="Rank & Lomyak System", page_icon="⚔️", layout="wide")
 st.title("⚔️ Rank & Giant Killing System")
 
-tab1, tab2 = st.tabs(["⚡ อัปเดตจาก Challonge", "🏅 อัปเดตอันดับ & สถิติ"])
+# 🔥 เรียง Tab ใหม่ตามที่ขอ
+tab1, tab2, tab3 = st.tabs(["⚡ อัปเดตจาก Challonge", "🏆 อัปเดตคะแนน (Excel)", "🏅 อัปเดตอันดับ & สถิติ"])
 
-# --- TAB 1: CHALLONGE SCORE & GIANT KILLING ---
+# --- TAB 1: CHALLONGE SCORE & GIANT KILLING (MOVED TO FIRST TAB) ---
 with tab1:
     st.header("⚡ อัปเดตจาก Challonge (Rank + Bonus)")
-    st.write("1. ให้คะแนนตามอันดับ และผู้เข้าร่วมทุกคน (งานย่อยแต้มหารครึ่ง)")
-    st.write("2. เช็คการล้มยักษ์ (Bonus +5 / งานย่อย +3)")
-    st.write("3. **ปิดรับสมัคร** งานแข่งให้อัตโนมัติ")
+    st.write("ระบบจะทำ 2 อย่างอัตโนมัติ:")
+    st.write("1. **ให้คะแนนตามอันดับ** (ที่ 1-16) สำหรับผู้เข้าแข่งขันทุกคน")
+    st.write("2. **เช็คการล้มยักษ์** (Bonus +5) จากผลการแข่งทุกคู่")
     
     if not CHALLONGE_API_KEY:
         st.error("⚠️ ไม่พบ CHALLONGE_API_KEY")
@@ -307,30 +264,33 @@ with tab1:
                 projects_map = get_all_projects_list()
             selected_project_name = st.selectbox("เลือกงานแข่ง (จาก Notion)", options=list(projects_map.keys()) if projects_map else [])
 
-        if st.button("🚀 ประมวลผลและปิดงาน", type="primary"):
+        if st.button("🚀 ประมวลผลและบันทึก", type="primary"):
             if not challonge_id_score or not selected_project_name:
                 st.error("กรุณากรอกข้อมูลให้ครบถ้วน")
             else:
                 proj_data = projects_map.get(selected_project_name)
                 project_id = proj_data['id']
                 is_minor = "งานย่อย" in str(proj_data['type'])
-                status_meta = proj_data.get('status_meta', {'name': 'Status', 'type': 'status'})
                 
                 status_box = st.empty()
-                status_box.info("1/5 📥 ดึงข้อมูล Challonge...")
+                
+                # 1. ดึงข้อมูลจาก Challonge (ครบเซ็ต)
+                status_box.info("1/4 📥 ดึงข้อมูล Challonge...")
                 chal_data, err = get_challonge_full_data(challonge_id_score, CHALLONGE_API_KEY)
                 
                 if err: st.error(err)
                 elif not chal_data['participants']: st.warning("ไม่พบข้อมูลผู้แข่งขัน")
                 else:
-                    status_box.info("2/5 👥 ดึงข้อมูลสมาชิก Notion...")
+                    # 2. ดึงข้อมูลสมาชิก Notion
+                    status_box.info("2/4 👥 ดึงข้อมูลสมาชิก Notion...")
                     all_members = fetch_all_members_data()
                     
+                    # ตัวแปรเก็บ Log
                     rank_logs = []
                     gk_logs = []
                     
-                    # --- Phase 3: Rank Score ---
-                    status_box.info("3/5 🧮 คำนวณคะแนนอันดับ...")
+                    # --- Phase 3: คำนวณคะแนนอันดับ (Rank Score) ---
+                    status_box.info("3/4 🧮 คำนวณคะแนนอันดับ...")
                     rank_prog = st.progress(0)
                     total_p = len(chal_data['participants'])
                     rank_success = 0
@@ -347,8 +307,8 @@ with tab1:
                         rank_prog.progress((i + 1) / total_p)
                         time.sleep(0.02)
                         
-                    # --- Phase 4: Giant Killing ---
-                    status_box.info("4/5 👹 เช็คโบนัสล้มยักษ์...")
+                    # --- Phase 4: เช็คล้มยักษ์ (Giant Killing) ---
+                    status_box.info("4/4 👹 เช็คโบนัสล้มยักษ์...")
                     gk_prog = st.progress(0)
                     total_m = len(chal_data['matches'])
                     gk_success = 0
@@ -358,27 +318,16 @@ with tab1:
                         raw_lose = chal_data['participants'][m['loser_id']]['name']
                         w_name, w_data = find_member_smart(raw_win, all_members)
                         l_name, l_data = find_member_smart(raw_lose, all_members)
+                        
                         if w_data and l_data:
                             if w_data['score'] <= 99 and l_data['score'] >= 100:
-                                # 🔥 Logic ใหม่: งานย่อยหารครึ่ง (5 -> 3)
-                                bonus = 5
-                                if is_minor: bonus = math.ceil(5 / 2)
-                                
                                 rec_name = f"Bonus: ล้มยักษ์ (ชนะ {l_name})"
-                                create_history_record(project_id, w_data['id'], bonus, rec_name)
-                                gk_logs.append(f"🔥 {w_name} ({w_data['score']}) ชนะ {l_name} ({l_data['score']}) -> +{bonus}")
+                                create_history_record(project_id, w_data['id'], 5, rec_name)
+                                gk_logs.append(f"🔥 {w_name} ({w_data['score']}) ชนะ {l_name} ({l_data['score']}) -> +5")
                                 gk_success += 1
                         gk_prog.progress((i + 1) / total_m)
                         time.sleep(0.02)
                     
-                    # --- Phase 5: Close Project ---
-                    status_box.info(f"5/5 🔒 ปิดรับสมัครงาน: {selected_project_name} ...")
-                    if update_project_status(project_id, status_meta['name'], status_meta['type'], "ปิดรับสมัครแล้ว"):
-                        st.toast(f"🔒 ปิดงาน '{selected_project_name}' แล้ว!", icon="✅")
-                        get_all_projects_list.clear()
-                    else:
-                        st.error("❌ อัปเดตสถานะงานไม่สำเร็จ")
-
                     status_box.empty()
                     st.success("🎉 ทำรายการเสร็จสิ้น!")
                     
@@ -394,8 +343,48 @@ with tab1:
                                 for l in gk_logs: st.caption(l)
                             else: st.info("ไม่พบการล้มยักษ์")
 
-# --- TAB 2: UPDATE RANK & STATS ---
+# --- TAB 2: EXCEL UPDATE ---
 with tab2:
+    st.header("📥 นำเข้าคะแนนจาก Excel")
+    uploaded_file = st.file_uploader("เลือกไฟล์ Excel (.xlsx)", type=['xlsx'])
+    if uploaded_file is not None:
+        try:
+            df = pd.read_excel(uploaded_file, header=None)
+            project_name_raw = df.iloc[0, 0]
+            st.info(f"📍 งานแข่ง: **{project_name_raw}**")
+            
+            if st.button("🚀 เริ่มคำนวณ", key="btn_excel"):
+                status_box = st.empty()
+                status_box.text("กำลังโหลดรายชื่อสมาชิก Notion ทั้งหมด...")
+                all_members = fetch_all_members_data()
+                if not all_members: st.error("❌ ไม่สามารถดึงรายชื่อสมาชิก"); st.stop()
+                
+                project_info = get_project_info(project_name_raw)
+                if not project_info: st.error(f"❌ ไม่พบงานแข่ง '{project_name_raw}'")
+                else:
+                    project_id = project_info['id']
+                    is_minor = "งานย่อย" in str(project_info['type'])
+                    data_rows = df.iloc[1:]
+                    total = len(data_rows)
+                    count_success = 0
+                    progress_bar = st.progress(0)
+                    for i, (index, row) in enumerate(data_rows.iterrows()):
+                        raw_name = str(row[0]) 
+                        if pd.isna(row[0]): continue
+                        found_name, found_data = find_member_smart(raw_name, all_members)
+                        status_box.text(f"กำลังทำ ({i+1}/{total}): {raw_name} -> {'✅ เจอ ' + found_name if found_name else '❌ ไม่เจอ'}")
+                        if found_data:
+                            score = calculate_score(index, is_minor)
+                            create_history_record(project_id, found_data['id'], score, project_name_raw)
+                            count_success += 1
+                        progress_bar.progress((i + 1) / total)
+                        time.sleep(0.05)
+                    status_box.empty()
+                    st.success(f"🎉 เสร็จสิ้น! บันทึก {count_success} รายการ")
+        except Exception as e: st.error(traceback.format_exc())
+
+# --- TAB 3: UPDATE RANK & STATS ---
+with tab3:
     st.header("🏅 อัปเดตอันดับ & สถิติ SS2")
     st.write("1. เรียงลำดับ Rank (คะแนนมาก->น้อย, ชื่อ ก->ฮ)")
     st.write("2. คำนวณสถิติการเข้าร่วม (เฉพาะงานหลักในช่วง 1 ม.ค. - 31 มี.ค. 26)")
@@ -422,49 +411,4 @@ with tab2:
                 progress_rank.progress((i + 1) / total_members)
                 time.sleep(0.05) 
             status_rank.empty()
-            st.success(f"🎉 อัปเดตเสร็จสิ้น! สำเร็จ {success_count}/{total_members}")
-
-
-import streamlit as st
-import requests
-
-st.divider()
-st.subheader("🎯 ค้นหา ID แบบเจาะจง (ไม่ Error 520)")
-
-# ใช้ Key เดิมของ M ที่คุณตูนมีอยู่ (335Cb...)
-api_key = st.secrets["CHALLONGE_API_KEY"] 
-target_slug = "skh0936a" 
-
-if st.button("🔍 ค้นหาเลข ID เดี๋ยวนี้"):
-    # ลองสูตรที่ 1: ค้นหาด้วยชื่อปกติ
-    url = f"https://api.challonge.com/v1/tournaments/{target_slug}.json"
-    params = {"api_key": api_key, "include_participants": 0}
-    
-    try:
-        st.info(f"กำลังลองเชื่อมต่อแบบที่ 1...")
-        res = requests.get(url, params=params)
-        
-        if res.status_code == 200:
-            t = res.json()['tournament']
-            st.success("✅ เจอแล้ว!!")
-            st.metric("เลข Challonge ID ที่ต้องใช้", t['id'])
-            st.caption("ก๊อปปี้เลขตัวใหญ่ๆ ข้างบน ไปใส่ในช่อง ID ได้เลยครับ")
-            
-        else:
-            # ถ้าสูตร 1 ไม่เจอ ลองสูตรที่ 2: เติมชื่อคอมมู monkeyking
-            st.warning(f"แบบปกติไม่เจอ (Code: {res.status_code}) กำลังลองแบบ Monkey King...")
-            
-            url2 = f"https://api.challonge.com/v1/tournaments/monkeyking-{target_slug}.json"
-            res2 = requests.get(url2, params=params)
-            
-            if res2.status_code == 200:
-                t2 = res2.json()['tournament']
-                st.success("✅ เจอในชื่อ Monkey King!!")
-                st.metric("เลข Challonge ID ที่ต้องใช้", t2['id'])
-                st.caption("ก๊อปปี้เลขตัวใหญ่ๆ ข้างบน ไปใส่ในช่อง ID ได้เลยครับ")
-            else:
-                st.error(f"❌ ยังไม่เจอครับ (Error สุดท้าย: {res2.status_code})")
-                st.write("ถ้ายันขึ้น Error 500/520 แสดงว่าเว็บ Challonge ล่มจริงๆ ครับ ต้องรอเขาซ่อม")
-
-    except Exception as e:
-        st.error(f"Error: {e}")
+            st.success(f"🎉 อัปเดตเสร็จสิ้น! สำเร็จ {success_count}/{total_members} คน")
