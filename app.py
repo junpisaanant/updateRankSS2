@@ -51,7 +51,6 @@ def fetch_all_members_data():
                         if name_val: name = name_val
                     
                     score = 0
-                    # --- จุดที่แก้ไข: เปลี่ยนชื่อคอลัมน์ให้ตรงกับ Notion ---
                     score_prop = page["properties"].get("คะแนน Rank SS2") 
                     
                     if score_prop:
@@ -122,14 +121,31 @@ def get_all_projects_list():
     return projects
 
 def calculate_score(row_index, is_minor_event):
+    # --- แก้ไข Logic การให้คะแนนใหม่ตรงนี้ ---
     score = 0
-    if row_index == 1: score = 25
-    elif row_index == 2: score = 20
-    elif 3 <= row_index <= 4: score = 16
-    elif 5 <= row_index <= 8: score = 10
-    elif 9 <= row_index <= 16: score = 5
-    else: score = 2
-    if is_minor_event and row_index <= 15: score = math.ceil(score / 2)
+    
+    # 1. กำหนดคะแนนดิบตามอันดับ (Standard)
+    if row_index == 1: 
+        score = 25
+    elif row_index == 2: 
+        score = 20
+    elif row_index == 3: 
+        score = 16
+    elif row_index == 4: 
+        score = 13  # แยกที่ 4 ออกมาเป็น 13 คะแนน
+    elif 5 <= row_index <= 8: 
+        score = 10
+    elif 9 <= row_index <= 16: 
+        score = 5
+    else: 
+        score = 2   # คะแนนเข้าร่วม (Participation)
+
+    # 2. ถ้าเป็นงานย่อย ให้หาร 2 ทุกกรณี (ใช้ math.ceil ปัดเศษขึ้น)
+    # ตัดเงื่อนไข row_index <= 15 ออก เพื่อให้มีผลกับทุกคน
+    if is_minor_event:
+        score = math.ceil(score / 2)
+        # ผลลัพธ์สำหรับคนเข้าร่วม (2 คะแนน) -> จะกลายเป็น 1 คะแนน
+
     return score
 
 def create_history_record(project_id, member_id, score, record_name):
@@ -248,7 +264,7 @@ st.title("⚔️ Rank & Giant Killing System")
 # 🔥 เรียง Tab ใหม่ตามที่ขอ
 tab1, tab2, tab3 = st.tabs(["⚡ อัปเดตจาก Challonge", "🏆 อัปเดตคะแนน (Excel)", "🏅 อัปเดตอันดับ & สถิติ"])
 
-# --- TAB 1: CHALLONGE SCORE & GIANT KILLING (MOVED TO FIRST TAB) ---
+# --- TAB 1: CHALLONGE SCORE & GIANT KILLING ---
 with tab1:
     st.header("⚡ อัปเดตจาก Challonge (Rank + Bonus)")
     st.write("ระบบจะทำ 2 อย่างอัตโนมัติ:")
