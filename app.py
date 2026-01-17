@@ -51,7 +51,9 @@ def fetch_all_members_data():
                         if name_val: name = name_val
                     
                     score = 0
-                    score_prop = page["properties"].get("คะแนนรวม SS2")
+                    # --- จุดที่แก้ไข: เปลี่ยนชื่อคอลัมน์ให้ตรงกับ Notion ---
+                    score_prop = page["properties"].get("คะแนน Rank SS2") 
+                    
                     if score_prop:
                         if score_prop['type'] == 'number': score = score_prop['number'] or 0
                         elif score_prop['type'] == 'rollup': score = score_prop['rollup'].get('number', 0) or 0
@@ -283,6 +285,7 @@ with tab1:
                 else:
                     # 2. ดึงข้อมูลสมาชิก Notion
                     status_box.info("2/4 👥 ดึงข้อมูลสมาชิก Notion...")
+                    fetch_all_members_data.clear() # Clear cache เพื่อให้ข้อมูลคะแนนล่าสุดเสมอ
                     all_members = fetch_all_members_data()
                     
                     # ตัวแปรเก็บ Log
@@ -356,6 +359,7 @@ with tab2:
             if st.button("🚀 เริ่มคำนวณ", key="btn_excel"):
                 status_box = st.empty()
                 status_box.text("กำลังโหลดรายชื่อสมาชิก Notion ทั้งหมด...")
+                fetch_all_members_data.clear() # Clear cache
                 all_members = fetch_all_members_data()
                 if not all_members: st.error("❌ ไม่สามารถดึงรายชื่อสมาชิก"); st.stop()
                 
@@ -389,7 +393,7 @@ with tab3:
     st.write("1. เรียงลำดับ Rank (คะแนนมาก->น้อย, ชื่อ ก->ฮ)")
     st.write("2. คำนวณสถิติการเข้าร่วม (เฉพาะงานหลักในช่วง 1 ม.ค. - 31 มี.ค. 26)")
     if st.button("🔄 คำนวณและอัปเดตทั้งหมด"):
-        fetch_all_members_data.clear() 
+        fetch_all_members_data.clear() # บังคับโหลดข้อมูลใหม่เพื่อให้ได้คะแนนล่าสุด
         status_rank = st.empty()
         status_rank.info("⏳ กำลังดึงข้อมูลสมาชิก...")
         all_members = fetch_all_members_data() 
@@ -398,7 +402,12 @@ with tab3:
         else:
             status_rank.info("⏳ กำลังดึงและคำนวณประวัติการเข้าร่วมงาน...")
             total_season_events, attendance_map = get_season2_stats_data()
+            
+            # --- Sorting Logic ---
+            # (-x['score']) = เรียงคะแนนมากไปน้อย
+            # (x['name']) = ถ้าคะแนนเท่ากัน เรียงชื่อ ก-ฮ
             all_members.sort(key=lambda x: (-x['score'], x['name']))
+            
             status_rank.info(f"✅ ข้อมูลพร้อม! งานหลัก SS2 ทั้งหมด: {total_season_events} งาน | เริ่มอัปเดตสมาชิก {total_members} คน...")
             progress_rank = st.progress(0)
             success_count = 0
@@ -406,7 +415,10 @@ with tab3:
                 rank = i + 1; rank_str = f"{rank}/{total_members}" 
                 attended_count = len(attendance_map.get(member['id'], set()))
                 stats_str = f"{attended_count}/{total_season_events}"
-                status_rank.text(f"Updating ({rank}/{total_members}): {member['name']} | Rank: {rank_str} | Stats: {stats_str}")
+                
+                # แสดง Debug ในหน้าจอขณะรัน
+                status_rank.text(f"Updating ({rank}/{total_members}): {member['name']} | Score: {member['score']} | Rank: {rank_str}")
+                
                 if update_rank_and_stats_to_notion(member['id'], rank_str, stats_str): success_count += 1
                 progress_rank.progress((i + 1) / total_members)
                 time.sleep(0.05) 
