@@ -28,7 +28,6 @@ headers = {
 
 @st.cache_data(ttl=300) 
 def fetch_all_members_data():
-    """ดึงข้อมูลสมาชิกทุกคน (ID, ชื่อ, คะแนน) เก็บเป็น List"""
     url = f"https://api.notion.com/v1/databases/{MEMBER_DB_ID}/query"
     members_list = []
     has_more = True
@@ -37,12 +36,10 @@ def fetch_all_members_data():
     while has_more:
         payload = {}
         if next_cursor: payload["start_cursor"] = next_cursor
-        
         try:
             response = requests.post(url, json=payload, headers=headers)
             if response.status_code != 200: break
             data = response.json()
-            
             for page in data.get("results", []):
                 try:
                     name = f"Unknown-{page['id'][-4:]}"
@@ -52,7 +49,6 @@ def fetch_all_members_data():
                     
                     score = 0
                     score_prop = page["properties"].get("คะแนน Rank SS2") 
-                    
                     if score_prop:
                         if score_prop['type'] == 'number': score = score_prop['number'] or 0
                         elif score_prop['type'] == 'rollup': score = score_prop['rollup'].get('number', 0) or 0
@@ -60,11 +56,9 @@ def fetch_all_members_data():
                     
                     members_list.append({"id": page["id"], "name": name, "score": score})
                 except: continue
-                    
             has_more = data.get("has_more", False)
             next_cursor = data.get("next_cursor")
         except: break
-        
     return members_list
 
 def find_member_smart(raw_text, members_list):
@@ -121,32 +115,43 @@ def get_all_projects_list():
     return projects
 
 def calculate_score(row_index, is_minor_event):
-    # --- แก้ไข Logic การให้คะแนนใหม่ตรงนี้ ---
     score = 0
+    if row_index == 1: score = 25
+    elif row_index == 2: score = 20
+    elif row_index == 3: score = 16
+    elif row_index == 4: score = 13
+    elif 5 <= row_index <= 8: score = 10
+    elif 9 <= row_index <= 16: score = 5
+    else: score = 2
     
-    # 1. กำหนดคะแนนดิบตามอันดับ (Standard)
-    if row_index == 1: 
-        score = 25
-    elif row_index == 2: 
-        score = 20
-    elif row_index == 3: 
-        score = 16
-    elif row_index == 4: 
-        score = 13  # แยกที่ 4 ออกมาเป็น 13 คะแนน
-    elif 5 <= row_index <= 8: 
-        score = 10
-    elif 9 <= row_index <= 16: 
-        score = 5
-    else: 
-        score = 2   # คะแนนเข้าร่วม (Participation)
-
-    # 2. ถ้าเป็นงานย่อย ให้หาร 2 ทุกกรณี (ใช้ math.ceil ปัดเศษขึ้น)
-    # ตัดเงื่อนไข row_index <= 15 ออก เพื่อให้มีผลกับทุกคน
     if is_minor_event:
         score = math.ceil(score / 2)
-        # ผลลัพธ์สำหรับคนเข้าร่วม (2 คะแนน) -> จะกลายเป็น 1 คะแนน
-
     return score
+
+# 🔥 NEW FUNCTION: เช็คว่ามีประวัติซ้ำไหม
+def check_history_exists(member_id, project_id, is_bonus=False):
+    url = f"https://api.notion.com/v1/databases/{HISTORY_DB_ID}/query"
+    # เช็คว่า สมาชิกคนนี้ + งานแข่งนี้ มีอยู่แล้วหรือยัง
+    filter_cond = {
+        "and": [
+            {"property": "สมาชิกแรงค์", "relation": {"contains": member_id}},
+            {"property": "ชื่องานแข่ง", "relation": {"contains": project_id}}
+        ]
+    }
+    # ถ้าเป็นโบนัส (ล้มยักษ์) เราจะไม่เช็คซ้ำเคร่งครัดมาก เพราะคนนึงอาจล้มยักษ์ได้หลายครั้งในงานเดียว
+    # แต่ถ้าเป็นคะแนนอันดับ (is_bonus=False) ต้องมีแค่ 1 ครั้งต่องาน
+    if is_bonus:
+        # สำหรับโบนัส อาจจะต้องปล่อยผ่าน หรือเช็คละเอียดกว่านี้ แต่เบื้องต้นปล่อยให้บันทึกได้ (หรือคุณจะเลือกให้บันทึกได้แค่ครั้งเดียวก็ได้)
+        return False 
+
+    payload = {"filter": filter_cond}
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        data = response.json()
+        # ถ้าเจอผลลัพธ์มากกว่า 0 แสดงว่ามีแล้ว
+        return len(data.get("results", [])) > 0
+    except:
+        return False
 
 def create_history_record(project_id, member_id, score, record_name):
     url = "https://api.notion.com/v1/pages"
@@ -261,15 +266,12 @@ def get_challonge_full_data(tournament_id, api_key):
 st.set_page_config(page_title="Rank & Lomyak System", page_icon="⚔️", layout="wide")
 st.title("⚔️ Rank & Giant Killing System")
 
-# 🔥 เรียง Tab ใหม่ตามที่ขอ
 tab1, tab2, tab3 = st.tabs(["⚡ อัปเดตจาก Challonge", "🏆 อัปเดตคะแนน (Excel)", "🏅 อัปเดตอันดับ & สถิติ"])
 
-# --- TAB 1: CHALLONGE SCORE & GIANT KILLING ---
+# --- TAB 1: CHALLONGE ---
 with tab1:
     st.header("⚡ อัปเดตจาก Challonge (Rank + Bonus)")
-    st.write("ระบบจะทำ 2 อย่างอัตโนมัติ:")
-    st.write("1. **ให้คะแนนตามอันดับ** (ที่ 1-16) สำหรับผู้เข้าแข่งขันทุกคน")
-    st.write("2. **เช็คการล้มยักษ์** (Bonus +5) จากผลการแข่งทุกคู่")
+    st.info("💡 ระบบป้องกันการเบิ้ล: ถ้ามีชื่อคนนี้ในงานนี้อยู่แล้ว จะข้ามการให้คะแนนอันดับ")
     
     if not CHALLONGE_API_KEY:
         st.error("⚠️ ไม่พบ CHALLONGE_API_KEY")
@@ -291,24 +293,19 @@ with tab1:
                 is_minor = "งานย่อย" in str(proj_data['type'])
                 
                 status_box = st.empty()
-                
-                # 1. ดึงข้อมูลจาก Challonge (ครบเซ็ต)
                 status_box.info("1/4 📥 ดึงข้อมูล Challonge...")
                 chal_data, err = get_challonge_full_data(challonge_id_score, CHALLONGE_API_KEY)
                 
                 if err: st.error(err)
                 elif not chal_data['participants']: st.warning("ไม่พบข้อมูลผู้แข่งขัน")
                 else:
-                    # 2. ดึงข้อมูลสมาชิก Notion
                     status_box.info("2/4 👥 ดึงข้อมูลสมาชิก Notion...")
-                    fetch_all_members_data.clear() # Clear cache เพื่อให้ข้อมูลคะแนนล่าสุดเสมอ
+                    fetch_all_members_data.clear()
                     all_members = fetch_all_members_data()
                     
-                    # ตัวแปรเก็บ Log
                     rank_logs = []
                     gk_logs = []
                     
-                    # --- Phase 3: คำนวณคะแนนอันดับ (Rank Score) ---
                     status_box.info("3/4 🧮 คำนวณคะแนนอันดับ...")
                     rank_prog = st.progress(0)
                     total_p = len(chal_data['participants'])
@@ -319,14 +316,16 @@ with tab1:
                         if p_info['final_rank']:
                             found_name, found_data = find_member_smart(p_info['name'], all_members)
                             if found_data:
-                                score = calculate_score(p_info['final_rank'], is_minor)
-                                create_history_record(project_id, found_data['id'], score, selected_project_name)
-                                rank_logs.append(f"✅ {p_info['name']} (ที่ {p_info['final_rank']}) -> +{score}")
-                                rank_success += 1
+                                # 🔥 CHECK DUPLICATE BEFORE CREATE
+                                if check_history_exists(found_data['id'], project_id, is_bonus=False):
+                                    rank_logs.append(f"⚠️ {found_data['name']} มีคะแนนงานนี้แล้ว (ข้าม)")
+                                else:
+                                    score = calculate_score(p_info['final_rank'], is_minor)
+                                    create_history_record(project_id, found_data['id'], score, selected_project_name)
+                                    rank_logs.append(f"✅ {p_info['name']} (ที่ {p_info['final_rank']}) -> +{score}")
+                                    rank_success += 1
                         rank_prog.progress((i + 1) / total_p)
-                        time.sleep(0.02)
-                        
-                    # --- Phase 4: เช็คล้มยักษ์ (Giant Killing) ---
+                    
                     status_box.info("4/4 👹 เช็คโบนัสล้มยักษ์...")
                     gk_prog = st.progress(0)
                     total_m = len(chal_data['matches'])
@@ -340,19 +339,19 @@ with tab1:
                         
                         if w_data and l_data:
                             if w_data['score'] <= 99 and l_data['score'] >= 100:
+                                # Bonus ล้มยักษ์ อาจจะอนุญาตให้ซ้ำได้ถ้าล้มหลายคน (ใส่ is_bonus=True)
                                 rec_name = f"Bonus: ล้มยักษ์ (ชนะ {l_name})"
                                 create_history_record(project_id, w_data['id'], 5, rec_name)
                                 gk_logs.append(f"🔥 {w_name} ({w_data['score']}) ชนะ {l_name} ({l_data['score']}) -> +5")
                                 gk_success += 1
                         gk_prog.progress((i + 1) / total_m)
-                        time.sleep(0.02)
                     
                     status_box.empty()
                     st.success("🎉 ทำรายการเสร็จสิ้น!")
                     
                     c1, c2 = st.columns(2)
                     with c1:
-                        st.markdown(f"### 🏆 คะแนนอันดับ ({rank_success} คน)")
+                        st.markdown(f"### 🏆 คะแนนอันดับ (เพิ่มใหม่ {rank_success} คน)")
                         with st.container(height=200):
                             for l in rank_logs: st.caption(l)
                     with c2:
@@ -362,9 +361,10 @@ with tab1:
                                 for l in gk_logs: st.caption(l)
                             else: st.info("ไม่พบการล้มยักษ์")
 
-# --- TAB 2: EXCEL UPDATE ---
+# --- TAB 2: EXCEL ---
 with tab2:
     st.header("📥 นำเข้าคะแนนจาก Excel")
+    st.info("💡 ระบบป้องกันการเบิ้ล: จะเช็คว่าคนนี้เคยได้คะแนนในงานนี้หรือยัง ก่อนบันทึก")
     uploaded_file = st.file_uploader("เลือกไฟล์ Excel (.xlsx)", type=['xlsx'])
     if uploaded_file is not None:
         try:
@@ -375,7 +375,7 @@ with tab2:
             if st.button("🚀 เริ่มคำนวณ", key="btn_excel"):
                 status_box = st.empty()
                 status_box.text("กำลังโหลดรายชื่อสมาชิก Notion ทั้งหมด...")
-                fetch_all_members_data.clear() # Clear cache
+                fetch_all_members_data.clear() 
                 all_members = fetch_all_members_data()
                 if not all_members: st.error("❌ ไม่สามารถดึงรายชื่อสมาชิก"); st.stop()
                 
@@ -387,29 +387,42 @@ with tab2:
                     data_rows = df.iloc[1:]
                     total = len(data_rows)
                     count_success = 0
+                    count_skip = 0
                     progress_bar = st.progress(0)
+                    
                     for i, (index, row) in enumerate(data_rows.iterrows()):
                         raw_name = str(row[0]) 
                         if pd.isna(row[0]): continue
                         found_name, found_data = find_member_smart(raw_name, all_members)
-                        status_box.text(f"กำลังทำ ({i+1}/{total}): {raw_name} -> {'✅ เจอ ' + found_name if found_name else '❌ ไม่เจอ'}")
+                        
+                        status_msg = f"({i+1}/{total}): {raw_name}"
                         if found_data:
-                            score = calculate_score(index, is_minor)
-                            create_history_record(project_id, found_data['id'], score, project_name_raw)
-                            count_success += 1
+                            # 🔥 CHECK DUPLICATE
+                            if check_history_exists(found_data['id'], project_id):
+                                status_msg += " ⚠️ มีคะแนนแล้ว (ข้าม)"
+                                count_skip += 1
+                            else:
+                                score = calculate_score(index, is_minor)
+                                create_history_record(project_id, found_data['id'], score, project_name_raw)
+                                status_msg += f" ✅ บันทึก +{score}"
+                                count_success += 1
+                        else:
+                            status_msg += " ❌ ไม่พบชื่อในระบบ"
+                        
+                        status_box.text(status_msg)
                         progress_bar.progress((i + 1) / total)
-                        time.sleep(0.05)
+                        
                     status_box.empty()
-                    st.success(f"🎉 เสร็จสิ้น! บันทึก {count_success} รายการ")
+                    st.success(f"🎉 เสร็จสิ้น! บันทึกใหม่ {count_success} | ข้าม (มีแล้ว) {count_skip}")
         except Exception as e: st.error(traceback.format_exc())
 
-# --- TAB 3: UPDATE RANK & STATS ---
+# --- TAB 3: UPDATE RANK & STATS (เหมือนเดิม) ---
 with tab3:
     st.header("🏅 อัปเดตอันดับ & สถิติ SS2")
     st.write("1. เรียงลำดับ Rank (คะแนนมาก->น้อย, ชื่อ ก->ฮ)")
     st.write("2. คำนวณสถิติการเข้าร่วม (เฉพาะงานหลักในช่วง 1 ม.ค. - 31 มี.ค. 26)")
     if st.button("🔄 คำนวณและอัปเดตทั้งหมด"):
-        fetch_all_members_data.clear() # บังคับโหลดข้อมูลใหม่เพื่อให้ได้คะแนนล่าสุด
+        fetch_all_members_data.clear() 
         status_rank = st.empty()
         status_rank.info("⏳ กำลังดึงข้อมูลสมาชิก...")
         all_members = fetch_all_members_data() 
@@ -419,9 +432,6 @@ with tab3:
             status_rank.info("⏳ กำลังดึงและคำนวณประวัติการเข้าร่วมงาน...")
             total_season_events, attendance_map = get_season2_stats_data()
             
-            # --- Sorting Logic ---
-            # (-x['score']) = เรียงคะแนนมากไปน้อย
-            # (x['name']) = ถ้าคะแนนเท่ากัน เรียงชื่อ ก-ฮ
             all_members.sort(key=lambda x: (-x['score'], x['name']))
             
             status_rank.info(f"✅ ข้อมูลพร้อม! งานหลัก SS2 ทั้งหมด: {total_season_events} งาน | เริ่มอัปเดตสมาชิก {total_members} คน...")
@@ -432,7 +442,6 @@ with tab3:
                 attended_count = len(attendance_map.get(member['id'], set()))
                 stats_str = f"{attended_count}/{total_season_events}"
                 
-                # แสดง Debug ในหน้าจอขณะรัน
                 status_rank.text(f"Updating ({rank}/{total_members}): {member['name']} | Score: {member['score']} | Rank: {rank_str}")
                 
                 if update_rank_and_stats_to_notion(member['id'], rank_str, stats_str): success_count += 1
