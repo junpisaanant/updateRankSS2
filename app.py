@@ -18,7 +18,7 @@ MEMBER_DB_ID = "271e6d24b97d80289175eef889a90a09"
 HISTORY_DB_ID = "2b1e6d24b97d803786c2ec7011c995ef" # ประวัติ Rank SS2 ปกติ
 PROJECT_DB_ID = "26fe6d24b97d80e1bdb3c2452a31694c" 
 
-# 🔥 ID Database ประวัติ Junior (แก้ให้แล้วตามที่แจ้ง)
+# 🔥 ID Database ประวัติ Junior
 JUNIOR_HISTORY_DB_ID = "2ece6d24b97d81c68562fae068f1483c" 
 
 headers = {
@@ -68,14 +68,21 @@ def fetch_all_members_data():
                     # 1. คะแนน Rank SS2 (ปกติ)
                     score = extract_numeric_value(page["properties"].get("คะแนน Rank SS2"))
                     
-                    # 2. 🔥 คะแนน Rank SS2 Junior (เพิ่มตรงนี้)
+                    # 2. คะแนน Rank SS2 Junior
                     score_jr = extract_numeric_value(page["properties"].get("คะแนน Rank SS2 Junior"))
+
+                    # 3. 🔥 ดึงอายุ (เพื่อใช้กรอง Junior)
+                    age = 99
+                    if "อายุ" in page["properties"]:
+                        age = extract_numeric_value(page["properties"]["อายุ"])
+                        if age == 0: age = 99 # ถ้าไม่มีค่า ให้ตีเป็นผู้ใหญ่ไว้ก่อน
                     
                     members_list.append({
                         "id": page["id"], 
                         "name": name, 
                         "score": score,
-                        "score_jr": score_jr # เก็บไว้ใช้เรียงลำดับ Junior
+                        "score_jr": score_jr,
+                        "age": age # เก็บอายุมาด้วย
                     })
                 except: continue
             has_more = data.get("has_more", False)
@@ -198,11 +205,9 @@ def update_rank_and_stats_to_notion(page_id, rank_text, stats_text):
         return res.status_code == 200
     except: return False
 
-# 🔥 [NEW] ฟังก์ชันอัปเดตอันดับ Junior โดยเฉพาะ
 def update_junior_rank_to_notion(page_id, rank_text):
     url = f"https://api.notion.com/v1/pages/{page_id}"
     properties = {
-        # ต้องตรงกับชื่อ Column ใน Notion เป๊ะๆ
         "อันดับ Rank SS2 Junior": { "rich_text": [{"text": {"content": str(rank_text)}}] }
     }
     payload = {"properties": properties}
@@ -308,6 +313,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["⚡ อัปเดตจาก Challonge", "
 with tab1:
     st.header("⚡ อัปเดตจาก Challonge (Rank + Bonus)")
     st.info("💡 ระบบป้องกันการเบิ้ล: ถ้ามีชื่อคนนี้ในงานนี้อยู่แล้ว จะข้ามการให้คะแนนอันดับ")
+    
     if not CHALLONGE_API_KEY:
         st.error("⚠️ ไม่พบ CHALLONGE_API_KEY")
     else:
@@ -482,7 +488,7 @@ with tab3:
             status_rank.empty()
             st.success(f"🎉 อัปเดตเสร็จสิ้น! สำเร็จ {success_count}/{total_members} คน")
 
-# --- 🔥 TAB 4: JUNIOR UPDATE (เพิ่มปุ่มอัปเดตอันดับ) ---
+# --- 🔥 TAB 4: JUNIOR UPDATE (พร้อมปุ่มคำนวณอันดับ และกรองอายุ) ---
 with tab4:
     st.header("👶 อัปเดตคะแนน Junior (Excel)")
     st.info("💡 หมายเหตุ: คะแนนจะถูกบันทึกลงในตาราง 'สถิติการลง Rank Junior ทั้งหมด'")
@@ -537,37 +543,43 @@ with tab4:
                     st.success(f"🎉 เสร็จสิ้น! บันทึก Junior ใหม่ {count_success} | ข้าม (มีแล้ว) {count_skip}")
         except Exception as e: st.error(traceback.format_exc())
 
-    # 🔥 ปุ่มคำนวณอันดับ Junior แยกต่างหาก
+    # 🔥 ปุ่มคำนวณอันดับ Junior แยกต่างหาก (พร้อมกรองอายุ)
     st.divider()
     st.subheader("🏅 คำนวณอันดับ Junior (Rank SS2 Junior)")
-    st.write("เรียงตาม คะแนน Junior (มากไปน้อย) -> ชื่อ (ก-ฮ)")
+    st.write("เงื่อนไข: กรองเฉพาะอายุ <= 13 และเรียงคะแนน Junior (มาก->น้อย)")
     
     if st.button("🔄 คำนวณและอัปเดตอันดับ Junior เดี๋ยวนี้"):
         fetch_all_members_data.clear()
         status_rank = st.empty()
-        status_rank.info("⏳ กำลังดึงข้อมูลและคะแนน Junior...")
+        status_rank.info("⏳ กำลังดึงข้อมูลและกรองอายุ...")
         all_members = fetch_all_members_data()
         
-        # กรองเฉพาะคนที่มีคะแนน Junior > 0 (ถ้าต้องการ) หรือเอาทุกคนก็ได้
-        # เรียงลำดับ: Score Junior (Desc), Name (Asc)
-        all_members.sort(key=lambda x: (-x['score_jr'], x['name']))
+        # 1. กรองเฉพาะคนที่อายุ <= 13
+        junior_qualifiers = [m for m in all_members if m['age'] <= 13]
         
-        total_members = len(all_members)
-        progress_rank = st.progress(0)
-        success_count = 0
+        # 2. เรียงลำดับ: Score Junior (Desc), Name (Asc)
+        junior_qualifiers.sort(key=lambda x: (-x['score_jr'], x['name']))
         
-        for i, member in enumerate(all_members):
-            rank = i + 1
-            rank_str = f"{rank}/{total_members}"
+        total_jrs = len(junior_qualifiers)
+        
+        if total_jrs == 0:
+            st.warning("ไม่พบสมาชิกที่อายุ <= 13 ปี")
+        else:
+            progress_rank = st.progress(0)
+            success_count = 0
             
-            status_rank.text(f"Updating Jr ({rank}/{total_members}): {member['name']} | Score Jr: {member['score_jr']}")
-            
-            # อัปเดตเฉพาะคอลัมน์ Junior Rank
-            if update_junior_rank_to_notion(member['id'], rank_str):
-                success_count += 1
-            
-            progress_rank.progress((i + 1) / total_members)
-            time.sleep(0.05)
-            
-        status_rank.empty()
-        st.success(f"🎉 อัปเดตอันดับ Junior เสร็จสิ้น! ({success_count}/{total_members} คน)")
+            for i, member in enumerate(junior_qualifiers):
+                rank = i + 1
+                rank_str = f"{rank}/{total_jrs}"
+                
+                status_rank.text(f"Updating Jr ({rank}/{total_jrs}): {member['name']} (Age: {member['age']}) | Score Jr: {member['score_jr']}")
+                
+                # อัปเดตเฉพาะคอลัมน์ Junior Rank
+                if update_junior_rank_to_notion(member['id'], rank_str):
+                    success_count += 1
+                
+                progress_rank.progress((i + 1) / total_jrs)
+                time.sleep(0.05)
+                
+            status_rank.empty()
+            st.success(f"🎉 อัปเดตอันดับ Junior เสร็จสิ้น! ({success_count}/{total_jrs} คน)")
