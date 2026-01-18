@@ -15,8 +15,11 @@ except FileNotFoundError:
     CHALLONGE_API_KEY = ""
 
 MEMBER_DB_ID = "271e6d24b97d80289175eef889a90a09" 
-HISTORY_DB_ID = "2b1e6d24b97d803786c2ec7011c995ef"
+HISTORY_DB_ID = "2b1e6d24b97d803786c2ec7011c995ef" # ประวัติ Rank SS2 ปกติ
 PROJECT_DB_ID = "26fe6d24b97d80e1bdb3c2452a31694c" 
+
+# 🔥 [NEW] ใส่ ID ของ Database "สถิติการลง Rank Junior ทั้งหมด" ตรงนี้
+JUNIOR_HISTORY_DB_ID = "Junior-2b1e6d24b97d803e82d0d5ae6871bd47" 
 
 headers = {
     "Authorization": "Bearer " + NOTION_TOKEN,
@@ -128,40 +131,41 @@ def calculate_score(row_index, is_minor_event):
         score = math.ceil(score / 2)
     return score
 
-# 🔥 NEW FUNCTION: เช็คว่ามีประวัติซ้ำไหม
-def check_history_exists(member_id, project_id, is_bonus=False):
-    url = f"https://api.notion.com/v1/databases/{HISTORY_DB_ID}/query"
-    # เช็คว่า สมาชิกคนนี้ + งานแข่งนี้ มีอยู่แล้วหรือยัง
+# 🔥 UPDATED: เพิ่ม target_db_id เพื่อให้รองรับทั้ง Junior และ Normal
+def check_history_exists(member_id, project_id, target_db_id, is_bonus=False):
+    url = f"https://api.notion.com/v1/databases/{target_db_id}/query"
+    
+    # ⚠️ หมายเหตุ: ชื่อ Property Relation ใน Junior DB ต้องเป็น "สมาชิกแรงค์" และ "ชื่องานแข่ง" เหมือนกัน
+    # ถ้าใน Junior ตั้งชื่อ column ต่างไป ต้องแก้โค้ดตรงนี้ตามจริงครับ
     filter_cond = {
         "and": [
             {"property": "สมาชิกแรงค์", "relation": {"contains": member_id}},
             {"property": "ชื่องานแข่ง", "relation": {"contains": project_id}}
         ]
     }
-    # ถ้าเป็นโบนัส (ล้มยักษ์) เราจะไม่เช็คซ้ำเคร่งครัดมาก เพราะคนนึงอาจล้มยักษ์ได้หลายครั้งในงานเดียว
-    # แต่ถ้าเป็นคะแนนอันดับ (is_bonus=False) ต้องมีแค่ 1 ครั้งต่องาน
-    if is_bonus:
-        # สำหรับโบนัส อาจจะต้องปล่อยผ่าน หรือเช็คละเอียดกว่านี้ แต่เบื้องต้นปล่อยให้บันทึกได้ (หรือคุณจะเลือกให้บันทึกได้แค่ครั้งเดียวก็ได้)
-        return False 
+    
+    if is_bonus: return False 
 
     payload = {"filter": filter_cond}
     try:
         response = requests.post(url, json=payload, headers=headers)
         data = response.json()
-        # ถ้าเจอผลลัพธ์มากกว่า 0 แสดงว่ามีแล้ว
         return len(data.get("results", [])) > 0
     except:
         return False
 
-def create_history_record(project_id, member_id, score, record_name):
+# 🔥 UPDATED: เพิ่ม target_db_id
+def create_history_record(project_id, member_id, score, record_name, target_db_id):
     url = "https://api.notion.com/v1/pages"
+    
+    # ⚠️ หมายเหตุ: ชื่อ Property ใน Junior DB ต้องตรงกับด้านล่างนี้
     properties = {
         "Name": { "title": [{"text": {"content": str(record_name)}}] },
         "สมาชิกแรงค์": { "relation": [{"id": member_id}] },
         "ชื่องานแข่ง": { "relation": [{"id": project_id}] },
         "คะแนนที่บวก": { "number": float(score) }
     }
-    payload = {"parent": {"database_id": HISTORY_DB_ID}, "properties": properties}
+    payload = {"parent": {"database_id": target_db_id}, "properties": properties}
     requests.post(url, json=payload, headers=headers)
     return True
 
@@ -266,7 +270,8 @@ def get_challonge_full_data(tournament_id, api_key):
 st.set_page_config(page_title="Rank & Lomyak System", page_icon="⚔️", layout="wide")
 st.title("⚔️ Rank & Giant Killing System")
 
-tab1, tab2, tab3 = st.tabs(["⚡ อัปเดตจาก Challonge", "🏆 อัปเดตคะแนน (Excel)", "🏅 อัปเดตอันดับ & สถิติ"])
+# เพิ่ม Tab ที่ 4 สำหรับ Junior
+tab1, tab2, tab3, tab4 = st.tabs(["⚡ อัปเดตจาก Challonge", "🏆 อัปเดตคะแนน (Excel)", "🏅 อัปเดตอันดับ & สถิติ", "👶 อัปเดตคะแนน Junior"])
 
 # --- TAB 1: CHALLONGE ---
 with tab1:
@@ -316,12 +321,12 @@ with tab1:
                         if p_info['final_rank']:
                             found_name, found_data = find_member_smart(p_info['name'], all_members)
                             if found_data:
-                                # 🔥 CHECK DUPLICATE BEFORE CREATE
-                                if check_history_exists(found_data['id'], project_id, is_bonus=False):
+                                # ใช้ HISTORY_DB_ID (Rank ปกติ)
+                                if check_history_exists(found_data['id'], project_id, HISTORY_DB_ID, is_bonus=False):
                                     rank_logs.append(f"⚠️ {found_data['name']} มีคะแนนงานนี้แล้ว (ข้าม)")
                                 else:
                                     score = calculate_score(p_info['final_rank'], is_minor)
-                                    create_history_record(project_id, found_data['id'], score, selected_project_name)
+                                    create_history_record(project_id, found_data['id'], score, selected_project_name, HISTORY_DB_ID)
                                     rank_logs.append(f"✅ {p_info['name']} (ที่ {p_info['final_rank']}) -> +{score}")
                                     rank_success += 1
                         rank_prog.progress((i + 1) / total_p)
@@ -339,9 +344,8 @@ with tab1:
                         
                         if w_data and l_data:
                             if w_data['score'] <= 99 and l_data['score'] >= 100:
-                                # Bonus ล้มยักษ์ อาจจะอนุญาตให้ซ้ำได้ถ้าล้มหลายคน (ใส่ is_bonus=True)
                                 rec_name = f"Bonus: ล้มยักษ์ (ชนะ {l_name})"
-                                create_history_record(project_id, w_data['id'], 5, rec_name)
+                                create_history_record(project_id, w_data['id'], 5, rec_name, HISTORY_DB_ID)
                                 gk_logs.append(f"🔥 {w_name} ({w_data['score']}) ชนะ {l_name} ({l_data['score']}) -> +5")
                                 gk_success += 1
                         gk_prog.progress((i + 1) / total_m)
@@ -397,13 +401,13 @@ with tab2:
                         
                         status_msg = f"({i+1}/{total}): {raw_name}"
                         if found_data:
-                            # 🔥 CHECK DUPLICATE
-                            if check_history_exists(found_data['id'], project_id):
+                            # ใช้ HISTORY_DB_ID (Rank ปกติ)
+                            if check_history_exists(found_data['id'], project_id, HISTORY_DB_ID):
                                 status_msg += " ⚠️ มีคะแนนแล้ว (ข้าม)"
                                 count_skip += 1
                             else:
                                 score = calculate_score(index, is_minor)
-                                create_history_record(project_id, found_data['id'], score, project_name_raw)
+                                create_history_record(project_id, found_data['id'], score, project_name_raw, HISTORY_DB_ID)
                                 status_msg += f" ✅ บันทึก +{score}"
                                 count_success += 1
                         else:
@@ -449,3 +453,64 @@ with tab3:
                 time.sleep(0.05) 
             status_rank.empty()
             st.success(f"🎉 อัปเดตเสร็จสิ้น! สำเร็จ {success_count}/{total_members} คน")
+
+# --- 🔥 NEW TAB 4: JUNIOR UPDATE ---
+with tab4:
+    st.header("👶 อัปเดตคะแนน Junior (Excel)")
+    
+    if JUNIOR_HISTORY_DB_ID == "REPLACE_WITH_JUNIOR_DB_ID":
+        st.error("🚨 กรุณาใส่ ID ของ Database 'สถิติการลง Rank Junior ทั้งหมด' ในโค้ดก่อนใช้งาน")
+    else:
+        st.info("💡 หมายเหตุ: คะแนนจะถูกบันทึกลงในตาราง 'สถิติการลง Rank Junior ทั้งหมด'")
+        uploaded_file_jr = st.file_uploader("เลือกไฟล์ Excel Junior (.xlsx)", type=['xlsx'], key="jr_file")
+        
+        if uploaded_file_jr is not None:
+            try:
+                df = pd.read_excel(uploaded_file_jr, header=None)
+                project_name_raw = df.iloc[0, 0]
+                st.info(f"📍 งานแข่ง (Junior): **{project_name_raw}**")
+                
+                if st.button("🚀 เริ่มคำนวณ (Junior)", key="btn_jr"):
+                    status_box = st.empty()
+                    status_box.text("กำลังโหลดรายชื่อสมาชิก Notion ทั้งหมด...")
+                    fetch_all_members_data.clear() 
+                    all_members = fetch_all_members_data()
+                    if not all_members: st.error("❌ ไม่สามารถดึงรายชื่อสมาชิก"); st.stop()
+                    
+                    project_info = get_project_info(project_name_raw)
+                    if not project_info: st.error(f"❌ ไม่พบงานแข่ง '{project_name_raw}'")
+                    else:
+                        project_id = project_info['id']
+                        is_minor = "งานย่อย" in str(project_info['type'])
+                        data_rows = df.iloc[1:]
+                        total = len(data_rows)
+                        count_success = 0
+                        count_skip = 0
+                        progress_bar = st.progress(0)
+                        
+                        for i, (index, row) in enumerate(data_rows.iterrows()):
+                            raw_name = str(row[0]) 
+                            if pd.isna(row[0]): continue
+                            found_name, found_data = find_member_smart(raw_name, all_members)
+                            
+                            status_msg = f"({i+1}/{total}): {raw_name}"
+                            if found_data:
+                                # 🔥 เช็คซ้ำใน JUNIOR DB
+                                if check_history_exists(found_data['id'], project_id, JUNIOR_HISTORY_DB_ID):
+                                    status_msg += " ⚠️ มีคะแนน Junior งานนี้แล้ว (ข้าม)"
+                                    count_skip += 1
+                                else:
+                                    score = calculate_score(index, is_minor)
+                                    # 🔥 บันทึกลง JUNIOR DB
+                                    create_history_record(project_id, found_data['id'], score, project_name_raw, JUNIOR_HISTORY_DB_ID)
+                                    status_msg += f" ✅ บันทึก Junior +{score}"
+                                    count_success += 1
+                            else:
+                                status_msg += " ❌ ไม่พบชื่อในระบบ"
+                            
+                            status_box.text(status_msg)
+                            progress_bar.progress((i + 1) / total)
+                            
+                        status_box.empty()
+                        st.success(f"🎉 เสร็จสิ้น! บันทึก Junior ใหม่ {count_success} | ข้าม (มีแล้ว) {count_skip}")
+            except Exception as e: st.error(traceback.format_exc())
