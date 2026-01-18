@@ -19,7 +19,7 @@ HISTORY_DB_ID = "2b1e6d24b97d803786c2ec7011c995ef" # ประวัติ Rank 
 PROJECT_DB_ID = "26fe6d24b97d80e1bdb3c2452a31694c" 
 
 # 🔥 [NEW] ใส่ ID ของ Database "สถิติการลง Rank Junior ทั้งหมด" ตรงนี้
-JUNIOR_HISTORY_DB_ID = "Junior-2b1e6d24b97d803e82d0d5ae6871bd47" 
+JUNIOR_HISTORY_DB_ID = "2ece6d24b97d81c68562fae068f1483c" 
 
 headers = {
     "Authorization": "Bearer " + NOTION_TOKEN,
