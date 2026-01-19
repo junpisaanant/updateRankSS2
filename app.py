@@ -29,25 +29,31 @@ headers = {
 
 # ================= HELPER FUNCTIONS =================
 
-# 🔥 Helper สำหรับดึงค่าตัวเลขจาก Notion (รองรับ Number, Formula, Rollup)
+# 🔥 Helper ตัดตัวเลขจาก text รูปแบบ "Name-Rank|ID"
+def extract_id_from_text(text):
+    if not isinstance(text, str): return None
+    if "|" not in text: return None
+    try:
+        # เอาตัวเลขหลังเครื่องหมาย | ตัวสุดท้าย
+        id_str = text.split("|")[-1].strip()
+        return int(id_str)
+    except:
+        return None
+
+# 🔥 Helper สำหรับดึงค่าตัวเลขจาก Notion
 def extract_numeric_value(prop):
     if not prop: return 0
     p_type = prop.get('type')
-    
     val = 0
-    if p_type == 'number':
-        val = prop.get('number')
-    elif p_type == 'formula':
-        val = prop.get('formula', {}).get('number')
-    elif p_type == 'rollup':
-        val = prop.get('rollup', {}).get('number')
-        
+    if p_type == 'number': val = prop.get('number')
+    elif p_type == 'formula': val = prop.get('formula', {}).get('number')
+    elif p_type == 'rollup': val = prop.get('rollup', {}).get('number')
     return val if val is not None else 0
 
 @st.cache_data(ttl=300) 
 def fetch_all_members_data():
     url = f"https://api.notion.com/v1/databases/{MEMBER_DB_ID}/query"
-    members_list = []
+    members_map = {} # 🔥 เปลี่ยนเป็น Dictionary เพื่อค้นหาด้วย ID เร็วๆ
     has_more = True
     next_cursor = None
     
@@ -60,43 +66,48 @@ def fetch_all_members_data():
             data = response.json()
             for page in data.get("results", []):
                 try:
-                    name = f"Unknown-{page['id'][-4:]}"
-                    if "ชื่อ" in page["properties"] and page["properties"]["ชื่อ"]["title"]:
-                        name_val = page["properties"]["ชื่อ"]["title"][0]["text"]["content"].strip()
-                        if name_val: name = name_val
+                    props = page["properties"]
                     
-                    # 1. คะแนน Rank SS2 (ปกติ)
-                    score = extract_numeric_value(page["properties"].get("คะแนน Rank SS2"))
+                    # 🔥 ดึง ID (จากคอลัมน์ ID หรือ No)
+                    custom_id = None
+                    if "ID" in props:
+                        # ลองดึงแบบ Number
+                        custom_id = props["ID"].get("number")
+                        # ถ้าไม่มี ลองดึงแบบ Unique ID
+                        if custom_id is None and "unique_id" in props["ID"]:
+                            custom_id = props["ID"]["unique_id"].get("number")
                     
-                    # 2. คะแนน Rank SS2 Junior
-                    score_jr = extract_numeric_value(page["properties"].get("คะแนน Rank SS2 Junior"))
+                    # ถ้าไม่มี ID ให้ข้ามไปเลย เพราะระบุตัวตนไม่ได้
+                    if custom_id is None: continue 
 
-                    # 3. 🔥 ดึงอายุ (เพื่อใช้กรอง Junior)
-                    age = 99
-                    if "อายุ" in page["properties"]:
-                        age = extract_numeric_value(page["properties"]["อายุ"])
-                        if age == 0: age = 99 # ถ้าไม่มีค่า ให้ตีเป็นผู้ใหญ่ไว้ก่อน
+                    name = "Unknown"
+                    if "ชื่อ" in props and props["ชื่อ"]["title"]:
+                        name = props["ชื่อ"]["title"][0]["text"]["content"].strip()
                     
-                    members_list.append({
-                        "id": page["id"], 
+                    # คะแนน Rank SS2 (ปกติ)
+                    score = extract_numeric_value(props.get("คะแนน Rank SS2"))
+                    # คะแนน Rank SS2 Junior
+                    score_jr = extract_numeric_value(props.get("คะแนน Rank SS2 Junior"))
+                    # อายุ
+                    age = 99
+                    if "อายุ" in props:
+                        age = extract_numeric_value(props["อายุ"])
+                        if age == 0: age = 99
+                    
+                    # เก็บใส่ Dict โดยใช้ ID เป็น Key
+                    members_map[custom_id] = {
+                        "id": page["id"], # Notion Page ID
+                        "custom_id": custom_id, # ID ที่คุณกำหนด (1, 2, 3...)
                         "name": name, 
                         "score": score,
                         "score_jr": score_jr,
-                        "age": age # เก็บอายุมาด้วย
-                    })
+                        "age": age
+                    }
                 except: continue
             has_more = data.get("has_more", False)
             next_cursor = data.get("next_cursor")
         except: break
-    return members_list
-
-def find_member_smart(raw_text, members_list):
-    if not isinstance(raw_text, str): return None, None
-    sorted_members = sorted(members_list, key=lambda x: len(x['name']), reverse=True)
-    for member in sorted_members:
-        if member['name'] in raw_text:
-            return member['name'], member
-    return None, None
+    return members_map
 
 def get_project_info(project_name):
     url = f"https://api.notion.com/v1/databases/{PROJECT_DB_ID}/query"
@@ -285,7 +296,7 @@ def get_challonge_full_data(tournament_id, api_key):
         for p in p_res.json():
             p_data = p['participant']
             participants_map[p_data['id']] = {
-                "name": p_data['name'],
+                "name": p_data['name'], # ตรงนี้จะได้ค่าเช่น "LovelyToonZ-F|1"
                 "final_rank": p_data.get('final_rank')
             }
 
@@ -312,7 +323,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["⚡ อัปเดตจาก Challonge", "
 # --- TAB 1: CHALLONGE ---
 with tab1:
     st.header("⚡ อัปเดตจาก Challonge (Rank + Bonus)")
-    st.info("💡 ระบบป้องกันการเบิ้ล: ถ้ามีชื่อคนนี้ในงานนี้อยู่แล้ว จะข้ามการให้คะแนนอันดับ")
+    st.info("💡 ระบบจะค้นหาจาก ID หลังเครื่องหมาย | (เช่น Name|1)")
     
     if not CHALLONGE_API_KEY:
         st.error("⚠️ ไม่พบ CHALLONGE_API_KEY")
@@ -340,9 +351,9 @@ with tab1:
                 if err: st.error(err)
                 elif not chal_data['participants']: st.warning("ไม่พบข้อมูลผู้แข่งขัน")
                 else:
-                    status_box.info("2/4 👥 ดึงข้อมูลสมาชิก Notion...")
+                    status_box.info("2/4 👥 ดึงข้อมูลสมาชิก Notion (Mapping ID)...")
                     fetch_all_members_data.clear()
-                    all_members = fetch_all_members_data()
+                    all_members_map = fetch_all_members_data() # ได้ Dict {1: data, 2: data}
                     
                     rank_logs = []
                     gk_logs = []
@@ -355,15 +366,22 @@ with tab1:
                     p_items = list(chal_data['participants'].items())
                     for i, (p_id, p_info) in enumerate(p_items):
                         if p_info['final_rank']:
-                            found_name, found_data = find_member_smart(p_info['name'], all_members)
+                            # 🔥 [Logic ใหม่] ตัด ID ออกมาแล้วค้นหาใน Map
+                            target_id = extract_id_from_text(p_info['name'])
+                            found_data = all_members_map.get(target_id)
+                            
                             if found_data:
+                                # ใช้ HISTORY_DB_ID (Rank ปกติ)
                                 if check_history_exists(found_data['id'], project_id, HISTORY_DB_ID, is_bonus=False):
-                                    rank_logs.append(f"⚠️ {found_data['name']} มีคะแนนงานนี้แล้ว (ข้าม)")
+                                    rank_logs.append(f"⚠️ {found_data['name']} (ID:{target_id}) มีคะแนนงานนี้แล้ว (ข้าม)")
                                 else:
                                     score = calculate_score(p_info['final_rank'], is_minor)
                                     if create_history_record(project_id, found_data['id'], score, selected_project_name, HISTORY_DB_ID):
-                                        rank_logs.append(f"✅ {p_info['name']} (ที่ {p_info['final_rank']}) -> +{score}")
+                                        rank_logs.append(f"✅ {found_data['name']} (ที่ {p_info['final_rank']}) -> +{score}")
                                         rank_success += 1
+                            else:
+                                rank_logs.append(f"❌ ไม่พบ ID {target_id} จากชื่อ {p_info['name']}")
+                                
                         rank_prog.progress((i + 1) / total_p)
                     
                     status_box.info("4/4 👹 เช็คโบนัสล้มยักษ์...")
@@ -374,14 +392,19 @@ with tab1:
                     for i, m in enumerate(chal_data['matches']):
                         raw_win = chal_data['participants'][m['winner_id']]['name']
                         raw_lose = chal_data['participants'][m['loser_id']]['name']
-                        w_name, w_data = find_member_smart(raw_win, all_members)
-                        l_name, l_data = find_member_smart(raw_lose, all_members)
+                        
+                        # 🔥 [Logic ใหม่] ตัด ID หา
+                        w_id = extract_id_from_text(raw_win)
+                        l_id = extract_id_from_text(raw_lose)
+                        
+                        w_data = all_members_map.get(w_id)
+                        l_data = all_members_map.get(l_id)
                         
                         if w_data and l_data:
                             if w_data['score'] <= 99 and l_data['score'] >= 100:
-                                rec_name = f"Bonus: ล้มยักษ์ (ชนะ {l_name})"
+                                rec_name = f"Bonus: ล้มยักษ์ (ชนะ {l_data['name']})"
                                 create_history_record(project_id, w_data['id'], 5, rec_name, HISTORY_DB_ID)
-                                gk_logs.append(f"🔥 {w_name} ({w_data['score']}) ชนะ {l_name} ({l_data['score']}) -> +5")
+                                gk_logs.append(f"🔥 {w_data['name']} ({w_data['score']}) ชนะ {l_data['name']} ({l_data['score']}) -> +5")
                                 gk_success += 1
                         gk_prog.progress((i + 1) / total_m)
                     
@@ -403,7 +426,7 @@ with tab1:
 # --- TAB 2: EXCEL ---
 with tab2:
     st.header("📥 นำเข้าคะแนนจาก Excel")
-    st.info("💡 ระบบป้องกันการเบิ้ล: จะเช็คว่าคนนี้เคยได้คะแนนในงานนี้หรือยัง ก่อนบันทึก")
+    st.info("💡 ไฟล์ Excel ต้องมีชื่อรูปแบบ Name|ID ระบบจะใช้ ID ในการค้นหา")
     uploaded_file = st.file_uploader("เลือกไฟล์ Excel (.xlsx)", type=['xlsx'])
     if uploaded_file is not None:
         try:
@@ -415,8 +438,8 @@ with tab2:
                 status_box = st.empty()
                 status_box.text("กำลังโหลดรายชื่อสมาชิก Notion ทั้งหมด...")
                 fetch_all_members_data.clear() 
-                all_members = fetch_all_members_data()
-                if not all_members: st.error("❌ ไม่สามารถดึงรายชื่อสมาชิก"); st.stop()
+                all_members_map = fetch_all_members_data()
+                if not all_members_map: st.error("❌ ไม่สามารถดึงรายชื่อสมาชิก"); st.stop()
                 
                 project_info = get_project_info(project_name_raw)
                 if not project_info: st.error(f"❌ ไม่พบงานแข่ง '{project_name_raw}'")
@@ -432,7 +455,10 @@ with tab2:
                     for i, (index, row) in enumerate(data_rows.iterrows()):
                         raw_name = str(row[0]) 
                         if pd.isna(row[0]): continue
-                        found_name, found_data = find_member_smart(raw_name, all_members)
+                        
+                        # 🔥 [Logic ใหม่] ตัด ID
+                        target_id = extract_id_from_text(raw_name)
+                        found_data = all_members_map.get(target_id)
                         
                         status_msg = f"({i+1}/{total}): {raw_name}"
                         if found_data:
@@ -445,7 +471,7 @@ with tab2:
                                 status_msg += f" ✅ บันทึก +{score}"
                                 count_success += 1
                         else:
-                            status_msg += " ❌ ไม่พบชื่อในระบบ"
+                            status_msg += " ❌ ไม่พบ ID ในระบบ"
                         
                         status_box.text(status_msg)
                         progress_bar.progress((i + 1) / total)
@@ -463,7 +489,9 @@ with tab3:
         fetch_all_members_data.clear() 
         status_rank = st.empty()
         status_rank.info("⏳ กำลังดึงข้อมูลสมาชิก...")
-        all_members = fetch_all_members_data() 
+        all_members_map = fetch_all_members_data() 
+        all_members = list(all_members_map.values()) # แปลงกลับเป็น list เพื่อวนลูป
+        
         total_members = len(all_members)
         if total_members == 0: st.error("❌ ไม่พบข้อมูลสมาชิก")
         else:
@@ -491,7 +519,7 @@ with tab3:
 # --- 🔥 TAB 4: JUNIOR UPDATE (พร้อมปุ่มคำนวณอันดับ และกรองอายุ) ---
 with tab4:
     st.header("👶 อัปเดตคะแนน Junior (Excel)")
-    st.info("💡 หมายเหตุ: คะแนนจะถูกบันทึกลงในตาราง 'สถิติการลง Rank Junior ทั้งหมด'")
+    st.info("💡 ไฟล์ Excel ต้องมีชื่อรูปแบบ Name|ID ระบบจะใช้ ID ในการค้นหา")
     uploaded_file_jr = st.file_uploader("เลือกไฟล์ Excel Junior (.xlsx)", type=['xlsx'], key="jr_file")
     
     if uploaded_file_jr is not None:
@@ -504,8 +532,8 @@ with tab4:
                 status_box = st.empty()
                 status_box.text("กำลังโหลดรายชื่อสมาชิก Notion ทั้งหมด...")
                 fetch_all_members_data.clear() 
-                all_members = fetch_all_members_data()
-                if not all_members: st.error("❌ ไม่สามารถดึงรายชื่อสมาชิก"); st.stop()
+                all_members_map = fetch_all_members_data()
+                if not all_members_map: st.error("❌ ไม่สามารถดึงรายชื่อสมาชิก"); st.stop()
                 
                 project_info = get_project_info(project_name_raw)
                 if not project_info: st.error(f"❌ ไม่พบงานแข่ง '{project_name_raw}'")
@@ -521,7 +549,10 @@ with tab4:
                     for i, (index, row) in enumerate(data_rows.iterrows()):
                         raw_name = str(row[0]) 
                         if pd.isna(row[0]): continue
-                        found_name, found_data = find_member_smart(raw_name, all_members)
+                        
+                        # 🔥 [Logic ใหม่] ตัด ID
+                        target_id = extract_id_from_text(raw_name)
+                        found_data = all_members_map.get(target_id)
                         
                         status_msg = f"({i+1}/{total}): {raw_name}"
                         if found_data:
@@ -534,7 +565,7 @@ with tab4:
                                     status_msg += f" ✅ บันทึก Junior +{score}"
                                     count_success += 1
                         else:
-                            status_msg += " ❌ ไม่พบชื่อในระบบ"
+                            status_msg += " ❌ ไม่พบ ID ในระบบ"
                         
                         status_box.text(status_msg)
                         progress_bar.progress((i + 1) / total)
@@ -552,7 +583,8 @@ with tab4:
         fetch_all_members_data.clear()
         status_rank = st.empty()
         status_rank.info("⏳ กำลังดึงข้อมูลและกรองอายุ...")
-        all_members = fetch_all_members_data()
+        all_members_map = fetch_all_members_data()
+        all_members = list(all_members_map.values())
         
         # 1. กรองเฉพาะคนที่อายุ <= 13
         junior_qualifiers = [m for m in all_members if m['age'] <= 13]
