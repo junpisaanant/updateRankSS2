@@ -53,7 +53,7 @@ def extract_numeric_value(prop):
 @st.cache_data(ttl=300) 
 def fetch_all_members_data():
     url = f"https://api.notion.com/v1/databases/{MEMBER_DB_ID}/query"
-    members_map = {} # 🔥 เปลี่ยนเป็น Dictionary เพื่อค้นหาด้วย ID เร็วๆ
+    members_map = {} 
     has_more = True
     next_cursor = None
     
@@ -68,36 +68,39 @@ def fetch_all_members_data():
                 try:
                     props = page["properties"]
                     
-                    # 🔥 ดึง ID (จากคอลัมน์ ID หรือ No)
+                    # 🔥 พยายามหา ID จากหลายๆ ชื่อ (No, ID, id, etc.)
                     custom_id = None
-                    if "ID" in props:
-                        # ลองดึงแบบ Number
-                        custom_id = props["ID"].get("number")
-                        # ถ้าไม่มี ลองดึงแบบ Unique ID
-                        if custom_id is None and "unique_id" in props["ID"]:
-                            custom_id = props["ID"]["unique_id"].get("number")
+                    target_col = None
                     
-                    # ถ้าไม่มี ID ให้ข้ามไปเลย เพราะระบุตัวตนไม่ได้
+                    # ลำดับการหา: No -> ID -> id -> ลำดับ
+                    for key in ["No", "ID", "id", "No.", "ลำดับ"]:
+                        if key in props:
+                            target_col = props[key]
+                            break
+                    
+                    if target_col:
+                        # ดึงค่าตามประเภท (Number หรือ Unique ID)
+                        if target_col['type'] == 'number':
+                            custom_id = target_col.get('number')
+                        elif target_col['type'] == 'unique_id':
+                            custom_id = target_col.get('unique_id', {}).get('number')
+                    
                     if custom_id is None: continue 
 
                     name = "Unknown"
                     if "ชื่อ" in props and props["ชื่อ"]["title"]:
                         name = props["ชื่อ"]["title"][0]["text"]["content"].strip()
                     
-                    # คะแนน Rank SS2 (ปกติ)
                     score = extract_numeric_value(props.get("คะแนน Rank SS2"))
-                    # คะแนน Rank SS2 Junior
                     score_jr = extract_numeric_value(props.get("คะแนน Rank SS2 Junior"))
-                    # อายุ
+                    
                     age = 99
                     if "อายุ" in props:
                         age = extract_numeric_value(props["อายุ"])
                         if age == 0: age = 99
                     
-                    # เก็บใส่ Dict โดยใช้ ID เป็น Key
                     members_map[custom_id] = {
-                        "id": page["id"], # Notion Page ID
-                        "custom_id": custom_id, # ID ที่คุณกำหนด (1, 2, 3...)
+                        "id": page["id"], 
                         "name": name, 
                         "score": score,
                         "score_jr": score_jr,
